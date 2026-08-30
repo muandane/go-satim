@@ -12,7 +12,7 @@ func FuzzRegisterOrderRequest_Validate(f *testing.F) {
 	f.Add(int64(0), "", "", "EN", int64(0), "", int(0))
 	f.Add(int64(-50), "invalid-url", "invalid-url", "AR", int64(999), "desc", int(500))
 
-	f.Fuzz(func(t *testing.T, amount int64, returnURL, failURL, lang string, orderNum int64, desc string, timeout int) {
+	f.Fuzz(func(_ *testing.T, amount int64, returnURL, failURL, lang string, orderNum int64, desc string, timeout int) {
 		req := satim.RegisterOrderRequest{
 			AmountMinor:        amount,
 			ReturnURL:          returnURL,
@@ -31,7 +31,7 @@ func FuzzRefundRequest_Validate(f *testing.F) {
 	f.Add("", int64(0), "")
 	f.Add("ord-abc", int64(-100), "DE")
 
-	f.Fuzz(func(t *testing.T, orderID string, amount int64, lang string) {
+	f.Fuzz(func(_ *testing.T, orderID string, amount int64, lang string) {
 		req := satim.RefundRequest{
 			OrderID:     orderID,
 			AmountMinor: amount,
@@ -48,7 +48,7 @@ func FuzzOrderStatusResponse_UnmarshalJSON(f *testing.F) {
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`invalid json`))
 
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		var resp satim.OrderStatusResponse
 		_ = json.Unmarshal(data, &resp)
 	})
