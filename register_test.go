@@ -1,11 +1,9 @@
 package satim_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -156,9 +154,7 @@ func TestGenerateOrderNumber(t *testing.T) {
 func TestClient_Register_Success(t *testing.T) {
 	t.Parallel()
 
-	creds := satim.Credentials{Username: "merchant", Password: "pwd", TerminalID: "TERM01"}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/register.do" {
 			t.Errorf("unexpected endpoint: %s", r.URL.Path)
 		}
@@ -167,7 +163,7 @@ func TestClient_Register_Success(t *testing.T) {
 			t.Fatalf("failed to parse form: %v", err)
 		}
 
-		if r.FormValue("userName") != "merchant" || r.FormValue("password") != "pwd" {
+		if r.FormValue("userName") != "test_user" || r.FormValue("password") != "test_password" {
 			t.Errorf("incorrect credentials in form: user=%s, pass=%s", r.FormValue("userName"), r.FormValue("password"))
 		}
 		if r.FormValue("currency") != "012" {
@@ -197,13 +193,7 @@ func TestClient_Register_Success(t *testing.T) {
 			"formUrl": "https://test.satim.dz/payment/merch/bpc-order-987",
 			"errorCode": "0"
 		}`))
-	}))
-	defer server.Close()
-
-	client, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
+	})
 
 	req := satim.RegisterOrderRequest{
 		AmountMinor:        250000, // 2500.00 DZD
@@ -218,7 +208,7 @@ func TestClient_Register_Success(t *testing.T) {
 		},
 	}
 
-	resp, err := client.Register(context.Background(), req)
+	resp, err := client.Register(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -236,8 +226,6 @@ func TestClient_Register_Success(t *testing.T) {
 
 func TestClient_Register_Errors(t *testing.T) {
 	t.Parallel()
-
-	creds := satim.Credentials{Username: "merchant", Password: "pwd", TerminalID: "TERM01"}
 
 	tests := []struct {
 		name       string
@@ -264,18 +252,12 @@ func TestClient_Register_Errors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.respJSON))
-			}))
-			defer server.Close()
+			})
 
-			client, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-			if err != nil {
-				t.Fatalf("failed to create client: %v", err)
-			}
-
-			_, err = client.Register(context.Background(), satim.RegisterOrderRequest{
+			_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
 				AmountMinor: 100000,
 				ReturnURL:   "https://merchant.dz/return",
 			})

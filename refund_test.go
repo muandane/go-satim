@@ -1,10 +1,8 @@
 package satim_test
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/muandane/go-satim"
@@ -18,7 +16,7 @@ func TestClient_Refund(t *testing.T) {
 	t.Run("validation empty order ID", func(t *testing.T) {
 		t.Parallel()
 		client, _ := satim.NewClient(creds)
-		_, err := client.Refund(context.Background(), satim.RefundRequest{
+		_, err := client.Refund(t.Context(), satim.RefundRequest{
 			OrderID:     "",
 			AmountMinor: 50000,
 		})
@@ -30,7 +28,7 @@ func TestClient_Refund(t *testing.T) {
 	t.Run("validation invalid amount", func(t *testing.T) {
 		t.Parallel()
 		client, _ := satim.NewClient(creds)
-		_, err := client.Refund(context.Background(), satim.RefundRequest{
+		_, err := client.Refund(t.Context(), satim.RefundRequest{
 			OrderID:     "ord-123",
 			AmountMinor: 0,
 		})
@@ -42,7 +40,7 @@ func TestClient_Refund(t *testing.T) {
 	t.Run("validation invalid language", func(t *testing.T) {
 		t.Parallel()
 		client, _ := satim.NewClient(creds)
-		_, err := client.Refund(context.Background(), satim.RefundRequest{
+		_, err := client.Refund(t.Context(), satim.RefundRequest{
 			OrderID:     "ord-123",
 			AmountMinor: 50000,
 			Language:    "IT",
@@ -54,7 +52,7 @@ func TestClient_Refund(t *testing.T) {
 
 	t.Run("successful refund", func(t *testing.T) {
 		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/refund.do" {
 				t.Errorf("expected /refund.do, got %s", r.URL.Path)
 			}
@@ -68,15 +66,9 @@ func TestClient_Refund(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"errorCode":"0","errorMessage":"Success"}`))
-		}))
-		defer server.Close()
+		})
 
-		client, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-
-		resp, err := client.Refund(context.Background(), satim.RefundRequest{
+		resp, err := client.Refund(t.Context(), satim.RefundRequest{
 			OrderID:     "ord-123",
 			AmountMinor: 50000, // 500.00 DZD
 		})

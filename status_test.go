@@ -1,10 +1,8 @@
 package satim_test
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/muandane/go-satim"
@@ -18,7 +16,7 @@ func TestClient_Confirm(t *testing.T) {
 	t.Run("validation empty order ID", func(t *testing.T) {
 		t.Parallel()
 		client, _ := satim.NewClient(creds)
-		_, err := client.Confirm(context.Background(), satim.ConfirmRequest{})
+		_, err := client.Confirm(t.Context(), satim.ConfirmRequest{})
 		if !errors.Is(err, satim.ErrMissingRequiredData) {
 			t.Fatalf("expected ErrMissingRequiredData, got %v", err)
 		}
@@ -27,7 +25,7 @@ func TestClient_Confirm(t *testing.T) {
 	t.Run("validation invalid language", func(t *testing.T) {
 		t.Parallel()
 		client, _ := satim.NewClient(creds)
-		_, err := client.Confirm(context.Background(), satim.ConfirmRequest{
+		_, err := client.Confirm(t.Context(), satim.ConfirmRequest{
 			OrderID:  "ord-123",
 			Language: "ES",
 		})
@@ -38,7 +36,7 @@ func TestClient_Confirm(t *testing.T) {
 
 	t.Run("successful confirmation", func(t *testing.T) {
 		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/confirmOrder.do" {
 				t.Errorf("expected /confirmOrder.do, got %s", r.URL.Path)
 			}
@@ -64,15 +62,9 @@ func TestClient_Confirm(t *testing.T) {
 					"respCode_desc": "Transaction Successful"
 				}
 			}`))
-		}))
-		defer server.Close()
+		})
 
-		client, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-
-		resp, err := client.Confirm(context.Background(), satim.ConfirmRequest{
+		resp, err := client.Confirm(t.Context(), satim.ConfirmRequest{
 			OrderID:  "ord-123",
 			Language: satim.LanguageFR,
 		})
@@ -85,6 +77,9 @@ func TestClient_Confirm(t *testing.T) {
 		}
 		if !resp.IsSuccessful() {
 			t.Errorf("expected IsSuccessful() == true")
+		}
+		if resp.IsPending() {
+			t.Errorf("expected IsPending() == false")
 		}
 		if resp.AmountMinor != 150000 {
 			t.Errorf("expected amount 150000, got %d", resp.AmountMinor)
@@ -110,18 +105,14 @@ func TestClient_Confirm(t *testing.T) {
 func TestClient_GetStatus(t *testing.T) {
 	t.Parallel()
 
-	creds := satim.Credentials{Username: "user", Password: "pwd", TerminalID: "TERM01"}
-
 	t.Run("order not found error 6", func(t *testing.T) {
 		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ErrorCode":"6","ErrorMessage":"Unknown order id"}`))
-		}))
-		defer server.Close()
+		})
 
-		client, _ := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-		_, err := client.GetStatus(context.Background(), satim.GetStatusRequest{OrderID: "missing-ord"})
+		_, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "missing-ord"})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -138,6 +129,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 		name         string
 		resp         satim.OrderStatusResponse
 		isSuccess    bool
+		isPending    bool
 		isRejected   bool
 		isRefunded   bool
 		isCancelled  bool
@@ -147,7 +139,37 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 		wantErrorM   string
 	}{
 		{
-			name: "successful order status 2",
+			name: "registered order status 0 (unpaid/pending, NEVER successful)",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusRegistered,
+				ErrorCode:   "0",
+			},
+			isSuccess:   false,
+			isPending:   true,
+			isRejected:  false,
+			isRefunded:  false,
+			isCancelled: false,
+			isExpired:   false,
+			isFailed:    false,
+			wantErrorM:  "Payment failed",
+		},
+		{
+			name: "3D-Secure authentication in progress status 5",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusACSAuth,
+				ErrorCode:   "0",
+			},
+			isSuccess:   false,
+			isPending:   true,
+			isRejected:  false,
+			isRefunded:  false,
+			isCancelled: false,
+			isExpired:   false,
+			isFailed:    false,
+			wantErrorM:  "Payment failed",
+		},
+		{
+			name: "successful approved order status 2",
 			resp: satim.OrderStatusResponse{
 				OrderStatus: satim.OrderStatusApproved,
 				ErrorCode:   "0",
@@ -157,6 +179,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				},
 			},
 			isSuccess:    true,
+			isPending:    false,
 			isRejected:   false,
 			isRefunded:   false,
 			isCancelled:  false,
@@ -172,6 +195,23 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				ErrorMessageText: "Payment is declined",
 			},
 			isSuccess:    false,
+			isPending:    false,
+			isRejected:   true,
+			isRefunded:   false,
+			isCancelled:  false,
+			isExpired:    false,
+			isFailed:     true,
+			wantSuccessM: "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+			wantErrorM:   "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+		},
+		{
+			name: "auth failed order status 6",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusAuthFailed,
+				ErrorCode:   "0",
+			},
+			isSuccess:    false,
+			isPending:    false,
 			isRejected:   true,
 			isRefunded:   false,
 			isCancelled:  false,
@@ -187,6 +227,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				ErrorCode:   "0",
 			},
 			isSuccess:  false,
+			isPending:  false,
 			isRejected: false,
 			isRefunded: true,
 			isFailed:   false,
@@ -199,6 +240,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				ErrorMessageText: "Payment is cancelled by user",
 			},
 			isCancelled: true,
+			isPending:   false,
 			isSuccess:   false,
 			isFailed:    true,
 		},
@@ -208,6 +250,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				ActionCode: "-2007",
 			},
 			isExpired: true,
+			isPending: false,
 			isSuccess: false,
 			isFailed:  true,
 		},
@@ -217,6 +260,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				ActionCode: "2003",
 			},
 			isRejected: true,
+			isPending:  false,
 			isSuccess:  false,
 			isFailed:   true,
 		},
@@ -227,6 +271,9 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 			t.Parallel()
 			if got := tc.resp.IsSuccessful(); got != tc.isSuccess {
 				t.Errorf("IsSuccessful() = %v, want %v", got, tc.isSuccess)
+			}
+			if got := tc.resp.IsPending(); got != tc.isPending {
+				t.Errorf("IsPending() = %v, want %v", got, tc.isPending)
 			}
 			if got := tc.resp.IsRejected(); got != tc.isRejected {
 				t.Errorf("IsRejected() = %v, want %v", got, tc.isRejected)

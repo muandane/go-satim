@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 )
 
 // ConfirmRequest specifies the order to confirm upon cardholder return.
@@ -112,21 +111,20 @@ func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
 
 // IsSuccessful reports whether the payment was successfully authorized and paid.
 func (r *OrderStatusResponse) IsSuccessful() bool {
-	return r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRegistered
+	return r.OrderStatus == OrderStatusApproved
+}
+
+// IsPending reports whether the order is created or undergoing 3D-Secure authentication and awaiting completion.
+func (r *OrderStatusResponse) IsPending() bool {
+	return r.OrderStatus == OrderStatusRegistered || r.OrderStatus == OrderStatusACSAuth
 }
 
 // IsRejected reports whether the transaction was declined or rejected.
 func (r *OrderStatusResponse) IsRejected() bool {
-	if r.ErrorCode == "0" && (r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRegistered) {
+	if r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRefunded || r.OrderStatus == OrderStatusRegistered {
 		return false
 	}
-	if strings.Contains(r.ErrorMessageText, "Payment is declined") || r.ActionCode == "2003" {
-		return true
-	}
-	if r.OrderStatus == OrderStatusRefunded {
-		return false
-	}
-	if r.OrderStatus == OrderStatusDeclined || r.OrderStatus == OrderStatusAuthFailed {
+	if r.ActionCode == "2003" || r.OrderStatus == OrderStatusDeclined || r.OrderStatus == OrderStatusAuthFailed {
 		return true
 	}
 	return false
@@ -139,13 +137,10 @@ func (r *OrderStatusResponse) IsRefunded() bool {
 
 // IsCancelled reports whether the customer or gateway cancelled the transaction.
 func (r *OrderStatusResponse) IsCancelled() bool {
-	if r.ErrorCode == "0" && (r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRegistered) {
+	if r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRefunded {
 		return false
 	}
-	if strings.Contains(r.ErrorMessageText, "Payment is cancelled") || r.ActionCode == "10" {
-		return true
-	}
-	return false
+	return r.ActionCode == "10"
 }
 
 // IsExpired reports whether the payment session timed out.
@@ -153,9 +148,9 @@ func (r *OrderStatusResponse) IsExpired() bool {
 	return r.ActionCode == "-2007"
 }
 
-// IsFailed reports whether the transaction failed and was not refunded.
+// IsFailed reports whether the transaction failed and was not refunded or pending.
 func (r *OrderStatusResponse) IsFailed() bool {
-	return !r.IsSuccessful() && !r.IsRefunded()
+	return !r.IsSuccessful() && !r.IsRefunded() && !r.IsPending()
 }
 
 // SuccessMessage returns the success description or a localized default.
