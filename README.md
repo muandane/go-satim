@@ -5,7 +5,8 @@
 </p>
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/muandane/go-satim.svg)](https://pkg.go.dev/github.com/muandane/go-satim)
-[![CI](https://github.com/muandane/go-satim/actions/workflows/ci.yml/badge.svg)](https://github.com/muandane/go-satim/actions/workflows/ci.yml)
+[![Build Status](https://github.com/muandane/go-satim/actions/workflows/ci.yml/badge.svg)](https://github.com/muandane/go-satim/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/muandane/go-satim/badge)](https://scorecard.dev/viewer/?pup=github.com/muandane/go-satim)
 [![Go Report Card](https://goreportcard.com/badge/github.com/muandane/go-satim)](https://goreportcard.com/report/github.com/muandane/go-satim)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 
