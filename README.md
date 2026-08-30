@@ -1,5 +1,9 @@
 # go-satim
 
+<p align="center">
+  <img src="images/satim.png" alt="SATIM Logo" width="260" />
+</p>
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/muandane/go-satim.svg)](https://pkg.go.dev/github.com/muandane/go-satim)
 [![CI](https://github.com/muandane/go-satim/actions/workflows/ci.yml/badge.svg)](https://github.com/muandane/go-satim/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/muandane/go-satim)](https://goreportcard.com/report/github.com/muandane/go-satim)
