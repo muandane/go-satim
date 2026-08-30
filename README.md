@@ -70,6 +70,7 @@ func main() {
 ### 2. Register a Payment Order
 
 Amounts are specified strictly in **minor currency units** (`AmountMinor int64`, centimes):
+
 - 1000.00 DZD = `100000`
 
 ```go

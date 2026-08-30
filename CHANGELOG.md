@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Initial standalone release of `go-satim` for Go 1.27.
 - Payment registration via `/register.do` with `AmountMinor int64` precision.
 - Cryptographically secure 10-digit order number generation via `crypto/rand`.

@@ -7,15 +7,19 @@ This document details the architectural principles, domain modeling, BPC SmartVi
 ## 1. Domain Modeling & Precision
 
 ### Minor Currency Units (`AmountMinor int64`)
+
 All monetary figures are represented as `int64` minor units (centimes for DZD). For example, 1,000.00 DZD is represented as `100000`. Float values and implicit conversions are excluded from the core SDK to eliminate floating-point rounding hazards in financial operations.
 
 ### Domestic Currency Scope
+
 SATIM functions as Algeria's domestic card payment switch (CIB and Edahabia cards) and processes transactions in Algerian Dinars (DZD). The currency field is fixed to numeric code `012` across all API payloads.
 
 ### Cryptographic Order Number Generation
+
 SATIM requires a 10-digit integer for `orderNumber`. When an order number is not explicitly provided, the SDK uses `crypto/rand` to generate a random 10-digit number (`[1000000000, 9999999999]`), preventing collision and enumeration vulnerabilities.
 
 ### Stateless Concurrency
+
 The `Client` is stateless and safe for concurrent use across goroutines. Every I/O operation accepts an explicit request struct (`RegisterOrderRequest`, `ConfirmRequest`, `GetStatusRequest`, `RefundRequest`) and takes a `context.Context` as its first parameter.
 
 ---
