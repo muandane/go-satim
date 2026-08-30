@@ -3,8 +3,22 @@ name: Test & Lint
 on:
   push:
     branches: [ main, feat/* ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - '.github/workflows/ci.yml'
+
+permissions: read-all
 
 jobs:
   test:
