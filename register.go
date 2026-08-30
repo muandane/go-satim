@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/url"
 	"strconv"
@@ -141,9 +142,7 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 	additionalData := make(map[string]string)
 	additionalData["force_terminal_id"] = c.creds.TerminalID
 
-	for k, v := range req.UserDefinedFields {
-		additionalData[k] = v
-	}
+	maps.Copy(additionalData, req.UserDefinedFields)
 
 	jsonParamsBytes, err := json.Marshal(additionalData)
 	if err != nil {
