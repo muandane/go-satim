@@ -22,7 +22,7 @@ permissions: read-all
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (go)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
