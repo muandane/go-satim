@@ -172,7 +172,7 @@ func TestClient_RetryPolicy(t *testing.T) {
 		t.Parallel()
 		var attempts atomic.Int32
 
-		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			att := attempts.Add(1)
 			if att == 1 {
 				http.Error(w, `{"errorCode":"500"}`, http.StatusInternalServerError)
@@ -198,7 +198,7 @@ func TestClient_RetryPolicy(t *testing.T) {
 		t.Parallel()
 		var attempts atomic.Int32
 
-		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			attempts.Add(1)
 			http.Error(w, `{"errorCode":"500","errorMessage":"Gateway fault"}`, http.StatusInternalServerError)
 		})

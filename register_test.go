@@ -252,7 +252,7 @@ func TestClient_Register_Errors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.respJSON))
 			})

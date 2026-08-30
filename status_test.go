@@ -107,7 +107,7 @@ func TestClient_GetStatus(t *testing.T) {
 
 	t.Run("order not found error 6", func(t *testing.T) {
 		t.Parallel()
-		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ErrorCode":"6","ErrorMessage":"Unknown order id"}`))
 		})
