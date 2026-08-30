@@ -105,6 +105,29 @@ func TestClient_Confirm(t *testing.T) {
 func TestClient_GetStatus(t *testing.T) {
 	t.Parallel()
 
+	creds := satim.Credentials{Username: "user", Password: "pwd", TerminalID: "TERM01"}
+
+	t.Run("validation empty order ID", func(t *testing.T) {
+		t.Parallel()
+		client, _ := satim.NewClient(creds)
+		_, err := client.GetStatus(t.Context(), satim.GetStatusRequest{})
+		if !errors.Is(err, satim.ErrMissingRequiredData) {
+			t.Fatalf("expected ErrMissingRequiredData, got %v", err)
+		}
+	})
+
+	t.Run("validation invalid language", func(t *testing.T) {
+		t.Parallel()
+		client, _ := satim.NewClient(creds)
+		_, err := client.GetStatus(t.Context(), satim.GetStatusRequest{
+			OrderID:  "ord-123",
+			Language: "ES",
+		})
+		if !errors.Is(err, satim.ErrInvalidLanguage) {
+			t.Fatalf("expected ErrInvalidLanguage, got %v", err)
+		}
+	})
+
 	t.Run("order not found error 6", func(t *testing.T) {
 		t.Parallel()
 		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -263,6 +286,54 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 			isPending:  false,
 			isSuccess:  false,
 			isFailed:   true,
+		},
+		{
+			name: "successful order with ActionCodeDescription fallback",
+			resp: satim.OrderStatusResponse{
+				OrderStatus:           satim.OrderStatusApproved,
+				ErrorCode:             "0",
+				ActionCodeDescription: "Success from action code",
+			},
+			isSuccess:    true,
+			wantSuccessM: "Success from action code",
+		},
+		{
+			name: "successful order with default message",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusApproved,
+				ErrorCode:   "0",
+			},
+			isSuccess:    true,
+			wantSuccessM: "Payment was successful",
+		},
+		{
+			name: "error message with respCode_desc param",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusRegistered,
+				Params: map[string]string{
+					"respCode_desc": "Custom error param desc",
+				},
+			},
+			isPending:  true,
+			wantErrorM: "Custom error param desc",
+		},
+		{
+			name: "error message with actionCodeDescription",
+			resp: satim.OrderStatusResponse{
+				OrderStatus:           satim.OrderStatusRegistered,
+				ActionCodeDescription: "Action code failed",
+			},
+			isPending:  true,
+			wantErrorM: "Action code failed",
+		},
+		{
+			name: "error message with ErrorMessageText",
+			resp: satim.OrderStatusResponse{
+				OrderStatus:      satim.OrderStatusRegistered,
+				ErrorMessageText: "Text error from gateway",
+			},
+			isPending:  true,
+			wantErrorM: "Text error from gateway",
 		},
 	}
 

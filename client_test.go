@@ -91,6 +91,33 @@ func TestClient_Options(t *testing.T) {
 		if c.BaseURL() != "https://test.satim.dz/payment/rest" {
 			t.Errorf("expected test URL, got %s", c.BaseURL())
 		}
+
+		cProd, err := satim.NewClient(creds, satim.WithTestMode(false))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cProd.BaseURL() != "https://cib.satim.dz/payment/rest" {
+			t.Errorf("expected prod URL, got %s", cProd.BaseURL())
+		}
+	})
+
+	t.Run("logger and http client options", func(t *testing.T) {
+		t.Parallel()
+		logger := slog.Default()
+		customHTTPClient := &http.Client{}
+		c, err := satim.NewClient(
+			creds,
+			satim.WithLogger(logger),
+			satim.WithLogger(nil),
+			satim.WithHTTPClient(nil),
+			satim.WithHTTPClient(customHTTPClient),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c == nil {
+			t.Fatal("expected non-nil client")
+		}
 	})
 
 	t.Run("custom base URL option", func(t *testing.T) {
@@ -213,5 +240,59 @@ func TestClient_RetryPolicy(t *testing.T) {
 		if attempts.Load() != 1 {
 			t.Errorf("expected exactly 1 attempt for mutation, got %d", attempts.Load())
 		}
+	})
+
+	t.Run("GetStatus exhausts retries on continuous 500", func(t *testing.T) {
+		t.Parallel()
+		var attempts atomic.Int32
+
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			attempts.Add(1)
+			http.Error(w, `server temporarily unavailable`, http.StatusServiceUnavailable)
+		})
+
+		_, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-retry-fail"})
+		if err == nil {
+			t.Fatal("expected error after exhausted retries")
+		}
+		if attempts.Load() != 3 {
+			t.Errorf("expected 3 retry attempts, got %d", attempts.Load())
+		}
+	})
+
+	t.Run("Numeric error code parsing and invalid JSON response", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("numeric errorCode float64 in JSON", func(t *testing.T) {
+			t.Parallel()
+			client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"errorCode": 5, "errorMessage": "Invalid credentials"}`))
+			})
+
+			_, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-num-err"})
+			if err == nil {
+				t.Fatal("expected error for numeric errorCode")
+			}
+			if !errors.Is(err, satim.ErrInvalidCredentials) {
+				t.Errorf("expected ErrInvalidCredentials, got %v", err)
+			}
+		})
+
+		t.Run("malformed non-JSON response", func(t *testing.T) {
+			t.Parallel()
+			client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write([]byte(`<html><body>Bad Gateway</body></html>`))
+			})
+
+			_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+				AmountMinor: 100000,
+				ReturnURL:   "https://example.com/return",
+			})
+			if err == nil {
+				t.Fatal("expected decode error for invalid json")
+			}
+		})
 	})
 }

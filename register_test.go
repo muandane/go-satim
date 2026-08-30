@@ -106,6 +106,16 @@ func TestRegister_Validation(t *testing.T) {
 			name:   "valid default request",
 			modify: func(_ *satim.RegisterOrderRequest) {},
 		},
+		{
+			name: "valid fully specified request",
+			modify: func(r *satim.RegisterOrderRequest) {
+				r.FailURL = "https://example.com/fail"
+				r.Language = satim.LanguageAR
+				r.OrderNumber = 1234567890
+				r.Description = "Valid test description"
+				r.SessionTimeoutSecs = 1800
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -124,13 +134,15 @@ func TestRegister_Validation(t *testing.T) {
 					t.Fatalf("unexpected validation error: %v", err)
 				}
 				if req.OrderNumber < 1000000000 || req.OrderNumber > 9999999999 {
-					t.Errorf("expected auto-generated 10-digit order number, got %d", req.OrderNumber)
+					t.Errorf("expected 10-digit order number, got %d", req.OrderNumber)
 				}
-				if req.FailURL != req.ReturnURL {
-					t.Errorf("expected FailURL to default to ReturnURL (%q), got %q", req.ReturnURL, req.FailURL)
-				}
-				if req.Language != satim.LanguageFR {
-					t.Errorf("expected default LanguageFR, got %q", req.Language)
+				if tc.name == "valid default request" {
+					if req.FailURL != req.ReturnURL {
+						t.Errorf("expected FailURL to default to ReturnURL (%q), got %q", req.ReturnURL, req.FailURL)
+					}
+					if req.Language != satim.LanguageFR {
+						t.Errorf("expected default LanguageFR, got %q", req.Language)
+					}
 				}
 			}
 		})

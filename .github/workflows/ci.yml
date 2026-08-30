@@ -1,10 +1,10 @@
-name: CI
+name: Test & Lint
 
 on:
   push:
-    branches: [ main, master, feat/* ]
+    branches: [ main, feat/* ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
   test:
@@ -25,6 +25,10 @@ jobs:
 
       - name: Run Tests with Race Detector
         run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Verify 80% Coverage Gate
+        run: |
+          go tool cover -func=coverage.out | awk '/total:/ { print "Coverage: " $3; gsub("%", "", $3); if ($3 < 80.0) { print "FAIL: Coverage below 80% threshold"; exit 1 } else { print "PASS: Coverage gate met (" $3 "%)" } }'
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
