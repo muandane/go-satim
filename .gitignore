@@ -30,3 +30,4 @@ go.work.sum
 .vscode/
 *.swp
 *.swo
+.cursor/hooks/state/continual-learning.json
