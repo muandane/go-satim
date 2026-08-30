@@ -1,0 +1,258 @@
+package satim_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/muandane/go-satim"
+)
+
+func TestClient_Confirm(t *testing.T) {
+	t.Parallel()
+
+	creds := satim.Credentials{Username: "user", Password: "pwd", TerminalID: "TERM01"}
+
+	t.Run("validation empty order ID", func(t *testing.T) {
+		t.Parallel()
+		client, _ := satim.NewClient(creds)
+		_, err := client.Confirm(context.Background(), satim.ConfirmRequest{})
+		if !errors.Is(err, satim.ErrMissingRequiredData) {
+			t.Fatalf("expected ErrMissingRequiredData, got %v", err)
+		}
+	})
+
+	t.Run("validation invalid language", func(t *testing.T) {
+		t.Parallel()
+		client, _ := satim.NewClient(creds)
+		_, err := client.Confirm(context.Background(), satim.ConfirmRequest{
+			OrderID:  "ord-123",
+			Language: "ES",
+		})
+		if !errors.Is(err, satim.ErrInvalidLanguage) {
+			t.Fatalf("expected ErrInvalidLanguage, got %v", err)
+		}
+	})
+
+	t.Run("successful confirmation", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/confirmOrder.do" {
+				t.Errorf("expected /confirmOrder.do, got %s", r.URL.Path)
+			}
+			_ = r.ParseForm()
+			if r.FormValue("orderId") != "ord-123" {
+				t.Errorf("expected orderId ord-123, got %s", r.FormValue("orderId"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"orderId": "ord-123",
+				"OrderStatus": "2",
+				"ErrorCode": "0",
+				"actionCode": "0",
+				"actionCodeDescription": "Approved",
+				"amount": "150000",
+				"currency": "012",
+				"Pan": "628058******1234",
+				"cardholderName": "JOHN DOE",
+				"expiration": "202712",
+				"approvalCode": "APP987",
+				"Ip": "197.200.10.5",
+				"params": {
+					"respCode_desc": "Transaction Successful"
+				}
+			}`))
+		}))
+		defer server.Close()
+
+		client, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
+		if err != nil {
+			t.Fatalf("failed to create client: %v", err)
+		}
+
+		resp, err := client.Confirm(context.Background(), satim.ConfirmRequest{
+			OrderID:  "ord-123",
+			Language: satim.LanguageFR,
+		})
+		if err != nil {
+			t.Fatalf("Confirm failed: %v", err)
+		}
+
+		if resp.OrderID != "ord-123" {
+			t.Errorf("expected OrderID ord-123, got %s", resp.OrderID)
+		}
+		if !resp.IsSuccessful() {
+			t.Errorf("expected IsSuccessful() == true")
+		}
+		if resp.AmountMinor != 150000 {
+			t.Errorf("expected amount 150000, got %d", resp.AmountMinor)
+		}
+		if resp.MaskedPAN() != "628058******1234" {
+			t.Errorf("expected masked PAN, got %s", resp.MaskedPAN())
+		}
+		if resp.CardholderName != "JOHN DOE" {
+			t.Errorf("expected cardholder JOHN DOE, got %s", resp.CardholderName)
+		}
+		if resp.ApprovalCode != "APP987" {
+			t.Errorf("expected approval code APP987, got %s", resp.ApprovalCode)
+		}
+		if resp.IP != "197.200.10.5" {
+			t.Errorf("expected IP 197.200.10.5, got %s", resp.IP)
+		}
+		if resp.SuccessMessage() != "Transaction Successful" {
+			t.Errorf("expected success message, got %s", resp.SuccessMessage())
+		}
+	})
+}
+
+func TestClient_GetStatus(t *testing.T) {
+	t.Parallel()
+
+	creds := satim.Credentials{Username: "user", Password: "pwd", TerminalID: "TERM01"}
+
+	t.Run("order not found error 6", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ErrorCode":"6","ErrorMessage":"Unknown order id"}`))
+		}))
+		defer server.Close()
+
+		client, _ := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
+		_, err := client.GetStatus(context.Background(), satim.GetStatusRequest{OrderID: "missing-ord"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, satim.ErrOrderNotFound) {
+			t.Fatalf("expected ErrOrderNotFound, got %v", err)
+		}
+	})
+}
+
+func TestOrderStatusResponse_Predicates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		resp         satim.OrderStatusResponse
+		isSuccess    bool
+		isRejected   bool
+		isRefunded   bool
+		isCancelled  bool
+		isExpired    bool
+		isFailed     bool
+		wantSuccessM string
+		wantErrorM   string
+	}{
+		{
+			name: "successful order status 2",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusApproved,
+				ErrorCode:   "0",
+				ActionCode:  "0",
+				Params: map[string]string{
+					"respCode_desc": "Approved by Bank",
+				},
+			},
+			isSuccess:    true,
+			isRejected:   false,
+			isRefunded:   false,
+			isCancelled:  false,
+			isExpired:    false,
+			isFailed:     false,
+			wantSuccessM: "Approved by Bank",
+		},
+		{
+			name: "declined order status 3",
+			resp: satim.OrderStatusResponse{
+				OrderStatus:      satim.OrderStatusDeclined,
+				ErrorCode:        "0",
+				ErrorMessageText: "Payment is declined",
+			},
+			isSuccess:    false,
+			isRejected:   true,
+			isRefunded:   false,
+			isCancelled:  false,
+			isExpired:    false,
+			isFailed:     true,
+			wantSuccessM: "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+			wantErrorM:   "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+		},
+		{
+			name: "refunded order status 4",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusRefunded,
+				ErrorCode:   "0",
+			},
+			isSuccess:  false,
+			isRejected: false,
+			isRefunded: true,
+			isFailed:   false,
+			wantErrorM: "Payment was refunded",
+		},
+		{
+			name: "cancelled action code 10",
+			resp: satim.OrderStatusResponse{
+				ActionCode:       "10",
+				ErrorMessageText: "Payment is cancelled by user",
+			},
+			isCancelled: true,
+			isSuccess:   false,
+			isFailed:    true,
+		},
+		{
+			name: "expired action code -2007",
+			resp: satim.OrderStatusResponse{
+				ActionCode: "-2007",
+			},
+			isExpired: true,
+			isSuccess: false,
+			isFailed:  true,
+		},
+		{
+			name: "action code 2003 declined",
+			resp: satim.OrderStatusResponse{
+				ActionCode: "2003",
+			},
+			isRejected: true,
+			isSuccess:  false,
+			isFailed:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.resp.IsSuccessful(); got != tc.isSuccess {
+				t.Errorf("IsSuccessful() = %v, want %v", got, tc.isSuccess)
+			}
+			if got := tc.resp.IsRejected(); got != tc.isRejected {
+				t.Errorf("IsRejected() = %v, want %v", got, tc.isRejected)
+			}
+			if got := tc.resp.IsRefunded(); got != tc.isRefunded {
+				t.Errorf("IsRefunded() = %v, want %v", got, tc.isRefunded)
+			}
+			if got := tc.resp.IsCancelled(); got != tc.isCancelled {
+				t.Errorf("IsCancelled() = %v, want %v", got, tc.isCancelled)
+			}
+			if got := tc.resp.IsExpired(); got != tc.isExpired {
+				t.Errorf("IsExpired() = %v, want %v", got, tc.isExpired)
+			}
+			if got := tc.resp.IsFailed(); got != tc.isFailed {
+				t.Errorf("IsFailed() = %v, want %v", got, tc.isFailed)
+			}
+			if tc.wantSuccessM != "" {
+				if got := tc.resp.SuccessMessage(); got != tc.wantSuccessM {
+					t.Errorf("SuccessMessage() = %q, want %q", got, tc.wantSuccessM)
+				}
+			}
+			if tc.wantErrorM != "" {
+				if got := tc.resp.ErrorMessage(); got != tc.wantErrorM {
+					t.Errorf("ErrorMessage() = %q, want %q", got, tc.wantErrorM)
+				}
+			}
+		})
+	}
+}

@@ -1,8 +1,0 @@
-parameters:
-
-    paths:
-        - src/
-
-    level: max
-
-    treatPhpDocTypesAsCertain: false

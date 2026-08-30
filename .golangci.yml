@@ -1,0 +1,26 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - revive
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+  gosec:
+    excludes:
+      - G104 # audited in tests
+      - G404 # weak random numbers - we strictly use crypto/rand for order numbers
