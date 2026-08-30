@@ -104,7 +104,7 @@ func TestRegister_Validation(t *testing.T) {
 		},
 		{
 			name:   "valid default request",
-			modify: func(r *satim.RegisterOrderRequest) {},
+			modify: func(_ *satim.RegisterOrderRequest) {},
 		},
 	}
 
