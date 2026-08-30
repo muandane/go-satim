@@ -1,35 +1,32 @@
-# Composer Related
-composer.lock
-/vendor
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 
-# Frontend Assets
-/node_modules
+# Test binary, built with `go test -c`
+*.test
 
-# Logs
-npm-debug.log
-yarn-error.log
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+coverage.txt
+coverage.html
 
-# Caches
-.phpunit.cache
-.phpunit.result.cache
-/build
+# Dependency directories (remove the comment below to include it)
+# vendor/
 
-# Editors
-/.idea
-/.fleet
-/.vscode
+# Go workspace file
+go.work
+go.work.sum
 
-# Code sniffer
-.php_cs
-.php_cs.cache
-.php-cs-fixer.cache
+# Environments and OS files
+.DS_Store
+.env
+.env.*
 
-# Misc
-phpunit.xml
-junit.xml
-coverage.xml
-psalm.xml
-testbench.yaml
-/docs
-/coverage
-/junk_data
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
