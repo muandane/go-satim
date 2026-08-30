@@ -2,16 +2,13 @@ package satim_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/muandane/go-satim"
 )
@@ -148,18 +145,34 @@ func TestCredentials_Redaction(t *testing.T) {
 			t.Errorf("expected [REDACTED] in slog output: %s", output)
 		}
 	})
+
+	t.Run("Client.Credentials() method redaction", func(t *testing.T) {
+		t.Parallel()
+		client, err := satim.NewClient(creds)
+		if err != nil {
+			t.Fatalf("failed to create client: %v", err)
+		}
+		returnedCreds := client.Credentials()
+		if returnedCreds.Password != "[REDACTED]" {
+			t.Errorf("expected Password to be [REDACTED], got %q", returnedCreds.Password)
+		}
+		if returnedCreds.Username != "merchant_admin" {
+			t.Errorf("expected Username merchant_admin, got %q", returnedCreds.Username)
+		}
+		if returnedCreds.TerminalID != "998877" {
+			t.Errorf("expected TerminalID 998877, got %q", returnedCreds.TerminalID)
+		}
+	})
 }
 
 func TestClient_RetryPolicy(t *testing.T) {
 	t.Parallel()
 
-	creds := satim.Credentials{Username: "u", Password: "p", TerminalID: "t"}
-
 	t.Run("GetStatus retries on server error and succeeds", func(t *testing.T) {
 		t.Parallel()
 		var attempts atomic.Int32
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			att := attempts.Add(1)
 			if att == 1 {
 				http.Error(w, `{"errorCode":"500"}`, http.StatusInternalServerError)
@@ -167,18 +180,9 @@ func TestClient_RetryPolicy(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ErrorCode":"0","OrderStatus":"2","orderId":"ord-123"}`))
-		}))
-		defer server.Close()
+		})
 
-		c, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		resp, err := c.GetStatus(ctx, satim.GetStatusRequest{OrderID: "ord-123"})
+		resp, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-123"})
 		if err != nil {
 			t.Fatalf("expected successful retry, got: %v", err)
 		}
@@ -194,18 +198,12 @@ func TestClient_RetryPolicy(t *testing.T) {
 		t.Parallel()
 		var attempts atomic.Int32
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			attempts.Add(1)
 			http.Error(w, `{"errorCode":"500","errorMessage":"Gateway fault"}`, http.StatusInternalServerError)
-		}))
-		defer server.Close()
+		})
 
-		c, err := satim.NewClient(creds, satim.WithBaseURL(server.URL), satim.WithHTTPClient(server.Client()))
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-
-		_, err = c.Register(context.Background(), satim.RegisterOrderRequest{
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
 			AmountMinor: 100000,
 			ReturnURL:   "https://merchant.dz/return",
 		})

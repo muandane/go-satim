@@ -56,7 +56,11 @@ func NewClient(creds Credentials, opts ...ClientOption) (*Client, error) {
 
 // Credentials returns the configured credentials with password redacted.
 func (c *Client) Credentials() Credentials {
-	return c.creds
+	return Credentials{
+		Username:   c.creds.Username,
+		Password:   "[REDACTED]",
+		TerminalID: c.creds.TerminalID,
+	}
 }
 
 // BaseURL returns the configured base API URL.
@@ -114,10 +118,9 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 			continue
 		}
 
-		defer resp.Body.Close()
-
 		limitedReader := io.LimitReader(resp.Body, maxResponseBody)
 		body, err := io.ReadAll(limitedReader)
+		_ = resp.Body.Close()
 		if err != nil {
 			lastErr = err
 			if !isReadOnly {
