@@ -1,6 +1,7 @@
 package satim
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -46,6 +47,9 @@ type RegisterOrderResponse struct {
 	// OrderID is SATIM's unique UUID/identifier for this registered payment.
 	OrderID string `json:"orderId"`
 
+	// OrderNumber is the 10-digit unique identifier assigned to this order.
+	OrderNumber int64 `json:"orderNumber,omitempty"`
+
 	// FormURL is the hosted SATIM payment page URL where the customer must be redirected.
 	FormURL string `json:"formUrl"`
 
@@ -57,6 +61,10 @@ type RegisterOrderResponse struct {
 
 	// Raw contains the unparsed JSON response map.
 	Raw map[string]any `json:"-"`
+}
+
+func (r *RegisterOrderResponse) setRaw(raw map[string]any) {
+	r.Raw = raw
 }
 
 // Validate checks request validity and sets required defaults.
@@ -73,12 +81,9 @@ func (r *RegisterOrderRequest) Validate() error {
 		return fmt.Errorf("%w: ReturnURL: %w", ErrInvalidURL, err)
 	}
 
-	if r.FailURL != "" {
-		if _, err := url.ParseRequestURI(r.FailURL); err != nil {
-			return fmt.Errorf("%w: FailURL: %w", ErrInvalidURL, err)
-		}
-	} else {
-		r.FailURL = r.ReturnURL
+	r.FailURL = cmp.Or(r.FailURL, r.ReturnURL)
+	if _, err := url.ParseRequestURI(r.FailURL); err != nil {
+		return fmt.Errorf("%w: FailURL: %w", ErrInvalidURL, err)
 	}
 
 	if r.OrderNumber != 0 {
@@ -93,9 +98,8 @@ func (r *RegisterOrderRequest) Validate() error {
 		r.OrderNumber = generated
 	}
 
-	if r.Language == "" {
-		r.Language = LanguageFR
-	} else if !r.Language.IsValid() {
+	r.Language = cmp.Or(r.Language, LanguageFR)
+	if !r.Language.IsValid() {
 		return ErrInvalidLanguage
 	}
 
@@ -152,7 +156,7 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 	form := make(url.Values)
 	form.Set("orderNumber", strconv.FormatInt(req.OrderNumber, 10))
 	form.Set("amount", strconv.FormatInt(req.AmountMinor, 10))
-	form.Set("currency", "012") // SATIM is strictly DZD
+	form.Set("currency", CurrencyDZD) // SATIM is strictly DZD
 	form.Set("returnUrl", req.ReturnURL)
 	form.Set("failUrl", req.FailURL)
 	form.Set("language", string(req.Language))
@@ -166,17 +170,11 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 		form.Set("sessionTimeoutSecs", strconv.Itoa(req.SessionTimeoutSecs))
 	}
 
-	body, err := c.doRequest(ctx, "/register.do", form, false)
+	resp, err := c.execute[RegisterOrderResponse](ctx, "/register.do", form, false)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp RegisterOrderResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("satim: parse register response: %w", err)
-	}
-
-	_ = json.Unmarshal(body, &resp.Raw)
-
-	return &resp, nil
+	resp.OrderNumber = req.OrderNumber
+	return resp, nil
 }

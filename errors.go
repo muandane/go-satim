@@ -48,6 +48,9 @@ var (
 
 	// ErrDescriptionTooLong indicates the order description exceeds 598 characters.
 	ErrDescriptionTooLong = errors.New("satim: description exceeds maximum length of 598 characters")
+
+	// ErrInvalidUUID indicates an order ID is not a valid UUID format.
+	ErrInvalidUUID = errors.New("satim: invalid UUID format")
 )
 
 // APIError represents an error response returned by the SATIM/BPC REST gateway.
@@ -68,15 +71,19 @@ func (e *APIError) Error() string {
 // Is reports whether e matches target for errors.Is checks.
 func (e *APIError) Is(target error) bool {
 	switch {
-	case errors.Is(target, ErrInvalidCredentials) && e.ErrorCode == "5":
+	case target == ErrInvalidCredentials && e.ErrorCode == "5":
 		return true
-	case errors.Is(target, ErrOrderNotFound) && e.ErrorCode == "6":
+	case target == ErrOrderNotFound && e.ErrorCode == "6":
 		return true
-	case errors.Is(target, ErrOrderAlreadyExists) && e.ErrorCode == "1":
+	case target == ErrOrderAlreadyExists && e.ErrorCode == "1":
 		return true
-	case errors.Is(target, ErrSystemError) && e.ErrorCode == "7":
+	case target == ErrSystemError && e.ErrorCode == "7":
 		return true
-	case errors.Is(target, ErrPaymentDeclined) && (e.ErrorCode == "2" || e.ErrorCode == "3"):
+	case target == ErrPaymentDeclined && (e.ErrorCode == "2" || e.ErrorCode == "3"):
+		return true
+	case target == ErrPaymentCancelled && e.ErrorCode == "10":
+		return true
+	case target == ErrSessionExpired && e.ErrorCode == "-2007":
 		return true
 	default:
 		return false

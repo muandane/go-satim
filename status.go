@@ -1,11 +1,28 @@
 package satim
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
+)
+
+// ActionCode represents the BPC transaction response code.
+type ActionCode string
+
+const (
+	// ActionCodeApproved indicates payment was authorized.
+	ActionCodeApproved ActionCode = "0"
+	// ActionCodeCancelled indicates the payment was aborted by the cardholder or system.
+	ActionCodeCancelled ActionCode = "10"
+	// ActionCodeDeclined indicates authorization was declined.
+	ActionCodeDeclined ActionCode = "2003"
+	// ActionCodeSessionExpired indicates the payment page session timed out.
+	ActionCodeSessionExpired ActionCode = "-2007"
 )
 
 // ConfirmRequest specifies the order to confirm upon cardholder return.
@@ -17,6 +34,18 @@ type ConfirmRequest struct {
 	Language Language
 }
 
+// Validate checks whether the confirmation parameters are valid.
+func (r *ConfirmRequest) Validate() error {
+	if r.OrderID == "" {
+		return fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
+	}
+	r.Language = cmp.Or(r.Language, LanguageFR)
+	if !r.Language.IsValid() {
+		return ErrInvalidLanguage
+	}
+	return nil
+}
+
 // GetStatusRequest specifies the order whose status to query.
 type GetStatusRequest struct {
 	// OrderID is the unique SATIM transaction identifier.
@@ -26,10 +55,25 @@ type GetStatusRequest struct {
 	Language Language
 }
 
+// Validate checks whether the status query parameters are valid.
+func (r *GetStatusRequest) Validate() error {
+	if r.OrderID == "" {
+		return fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
+	}
+	r.Language = cmp.Or(r.Language, LanguageFR)
+	if !r.Language.IsValid() {
+		return ErrInvalidLanguage
+	}
+	return nil
+}
+
 // OrderStatusResponse contains the detailed transaction state returned by Confirm or GetStatus.
 type OrderStatusResponse struct {
 	// OrderID is the unique SATIM transaction identifier.
 	OrderID string `json:"orderId"`
+
+	// OrderNumber is the 10-digit merchant order number assigned during registration.
+	OrderNumber int64 `json:"OrderNumber,omitempty"`
 
 	// OrderStatus represents the BPC order state ("0" through "6").
 	OrderStatus OrderStatus `json:"OrderStatus"`
@@ -74,15 +118,21 @@ type OrderStatusResponse struct {
 	Raw map[string]any `json:"-"`
 }
 
+func (r *OrderStatusResponse) setRaw(raw map[string]any) {
+	r.Raw = raw
+}
+
 // UnmarshalJSON handles flexible numeric and string types in BPC JSON responses.
 func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
 	type Alias OrderStatusResponse
 	aux := struct {
 		*Alias
-		RawOrderStatus any `json:"OrderStatus"`
-		RawErrorCode   any `json:"ErrorCode"`
-		RawActionCode  any `json:"actionCode"`
-		RawAmount      any `json:"amount"`
+		RawOrderNumber      any `json:"OrderNumber"`
+		RawOrderNumberLower any `json:"orderNumber"`
+		RawOrderStatus      any `json:"OrderStatus"`
+		RawErrorCode        any `json:"ErrorCode"`
+		RawActionCode       any `json:"actionCode"`
+		RawAmount           any `json:"amount"`
 	}{
 		Alias: (*Alias)(r),
 	}
@@ -91,6 +141,15 @@ func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	if aux.RawOrderNumber != nil {
+		if val, ok := parseNumericInt64(aux.RawOrderNumber); ok {
+			r.OrderNumber = val
+		}
+	} else if aux.RawOrderNumberLower != nil {
+		if val, ok := parseNumericInt64(aux.RawOrderNumberLower); ok {
+			r.OrderNumber = val
+		}
+	}
 	if aux.RawOrderStatus != nil {
 		r.OrderStatus = OrderStatus(fmt.Sprint(aux.RawOrderStatus))
 	}
@@ -101,12 +160,32 @@ func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
 		r.ActionCode = fmt.Sprint(aux.RawActionCode)
 	}
 	if aux.RawAmount != nil {
-		if val, err := strconv.ParseInt(fmt.Sprint(aux.RawAmount), 10, 64); err == nil {
+		if val, ok := parseNumericInt64(aux.RawAmount); ok {
 			r.AmountMinor = val
 		}
 	}
 
 	return nil
+}
+
+func parseNumericInt64(val any) (int64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case string:
+		v = strings.TrimSpace(v)
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n, true
+		}
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return int64(f), true
+		}
+	}
+	return 0, false
 }
 
 // IsSuccessful reports whether the payment was successfully authorized and paid.
@@ -124,7 +203,7 @@ func (r *OrderStatusResponse) IsRejected() bool {
 	if r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRefunded || r.OrderStatus == OrderStatusRegistered {
 		return false
 	}
-	if r.ActionCode == "2003" || r.OrderStatus == OrderStatusDeclined || r.OrderStatus == OrderStatusAuthFailed {
+	if r.ActionCode == string(ActionCodeDeclined) || r.OrderStatus == OrderStatusDeclined || r.OrderStatus == OrderStatusAuthFailed {
 		return true
 	}
 	return false
@@ -140,17 +219,36 @@ func (r *OrderStatusResponse) IsCancelled() bool {
 	if r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRefunded {
 		return false
 	}
-	return r.ActionCode == "10"
+	return r.ActionCode == string(ActionCodeCancelled)
 }
 
 // IsExpired reports whether the payment session timed out.
 func (r *OrderStatusResponse) IsExpired() bool {
-	return r.ActionCode == "-2007"
+	return r.ActionCode == string(ActionCodeSessionExpired)
 }
 
 // IsFailed reports whether the transaction failed and was not refunded or pending.
 func (r *OrderStatusResponse) IsFailed() bool {
 	return !r.IsSuccessful() && !r.IsRefunded() && !r.IsPending()
+}
+
+// Err returns a sentinel error corresponding to the transaction outcome, or nil if the payment was successful or pending.
+func (r *OrderStatusResponse) Err() error {
+	switch {
+	case r.IsSuccessful(), r.IsPending():
+		return nil
+	case r.IsCancelled():
+		return ErrPaymentCancelled
+	case r.IsExpired():
+		return ErrSessionExpired
+	case r.IsRejected():
+		return ErrPaymentDeclined
+	default:
+		if r.ErrorMessageText != "" {
+			return errors.New(r.ErrorMessageText)
+		}
+		return errors.New("satim: payment not completed")
+	}
 }
 
 // SuccessMessage returns the success description or a localized default.
@@ -198,33 +296,15 @@ func (r *OrderStatusResponse) MaskedPAN() string {
 // In the BPC SmartVista platform, /confirmOrder.do performs order completion after the cardholder
 // returns from the gateway. It transition the transaction to the confirmed state.
 func (c *Client) Confirm(ctx context.Context, req ConfirmRequest) (*OrderStatusResponse, error) {
-	if req.OrderID == "" {
-		return nil, fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
-	}
-
-	if req.Language == "" {
-		req.Language = LanguageFR
-	} else if !req.Language.IsValid() {
-		return nil, ErrInvalidLanguage
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
 
 	form := make(url.Values)
 	form.Set("orderId", req.OrderID)
 	form.Set("language", string(req.Language))
 
-	body, err := c.doRequest(ctx, "/confirmOrder.do", form, false)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp OrderStatusResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("satim: parse confirm response: %w", err)
-	}
-
-	_ = json.Unmarshal(body, &resp.Raw)
-
-	return &resp, nil
+	return c.execute[OrderStatusResponse](ctx, "/confirmOrder.do", form, false)
 }
 
 // GetStatus queries the current state of an order idempotently without modifying state.
@@ -233,31 +313,13 @@ func (c *Client) Confirm(ctx context.Context, req ConfirmRequest) (*OrderStatusR
 // /getOrderStatus.do is a read-only endpoint that can be queried at any time for status polling,
 // reconciliation, and failure recovery. Transient network errors on GetStatus are safely retried.
 func (c *Client) GetStatus(ctx context.Context, req GetStatusRequest) (*OrderStatusResponse, error) {
-	if req.OrderID == "" {
-		return nil, fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
-	}
-
-	if req.Language == "" {
-		req.Language = LanguageFR
-	} else if !req.Language.IsValid() {
-		return nil, ErrInvalidLanguage
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
 
 	form := make(url.Values)
 	form.Set("orderId", req.OrderID)
 	form.Set("language", string(req.Language))
 
-	body, err := c.doRequest(ctx, "/getOrderStatus.do", form, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp OrderStatusResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("satim: parse getOrderStatus response: %w", err)
-	}
-
-	_ = json.Unmarshal(body, &resp.Raw)
-
-	return &resp, nil
+	return c.execute[OrderStatusResponse](ctx, "/getOrderStatus.do", form, true)
 }

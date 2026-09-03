@@ -3,6 +3,7 @@ package satim_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -280,5 +281,75 @@ func TestClient_Register_Errors(t *testing.T) {
 				t.Fatalf("expected errors.Is match for %v, got %v", tc.matchError, err)
 			}
 		})
+	}
+}
+
+func TestClient_Register_OrderNumber_Preservation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("auto-generated order number is preserved in response", func(t *testing.T) {
+		t.Parallel()
+		var receivedOrderNumber string
+
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			receivedOrderNumber = r.FormValue("orderNumber")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orderId":"bpc-123","formUrl":"https://pay.dz","errorCode":"0"}`))
+		})
+
+		resp, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+			OrderNumber: 0, // Should auto-generate
+		})
+		if err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
+
+		if resp.OrderNumber < 1000000000 || resp.OrderNumber > 9999999999 {
+			t.Errorf("expected 10-digit order number in response, got %d", resp.OrderNumber)
+		}
+		if fmt.Sprintf("%d", resp.OrderNumber) != receivedOrderNumber {
+			t.Errorf("response OrderNumber %d does not match form value %s", resp.OrderNumber, receivedOrderNumber)
+		}
+	})
+
+	t.Run("explicit order number is preserved in response", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orderId":"bpc-456","formUrl":"https://pay.dz","errorCode":"0"}`))
+		})
+
+		resp, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+			OrderNumber: 1234567890,
+		})
+		if err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
+
+		if resp.OrderNumber != 1234567890 {
+			t.Errorf("expected OrderNumber 1234567890, got %d", resp.OrderNumber)
+		}
+	})
+}
+
+func TestClient_Register_ValidateFailure(t *testing.T) {
+	t.Parallel()
+
+	client, _ := satim.NewClient(satim.Credentials{
+		Username:   "user",
+		Password:   "pwd",
+		TerminalID: "term",
+	})
+
+	_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+		AmountMinor: 0, // Invalid
+	})
+	if !errors.Is(err, satim.ErrInvalidAmount) {
+		t.Fatalf("expected ErrInvalidAmount, got %v", err)
 	}
 }

@@ -59,6 +59,8 @@ func TestAPIError_Is(t *testing.T) {
 		{name: "code 7 matches ErrSystemError", errCode: "7", targetErr: satim.ErrSystemError, want: true},
 		{name: "code 2 matches ErrPaymentDeclined", errCode: "2", targetErr: satim.ErrPaymentDeclined, want: true},
 		{name: "code 3 matches ErrPaymentDeclined", errCode: "3", targetErr: satim.ErrPaymentDeclined, want: true},
+		{name: "code 10 matches ErrPaymentCancelled", errCode: "10", targetErr: satim.ErrPaymentCancelled, want: true},
+		{name: "code -2007 matches ErrSessionExpired", errCode: "-2007", targetErr: satim.ErrSessionExpired, want: true},
 		{name: "unmatched code returns false", errCode: "99", targetErr: satim.ErrSystemError, want: false},
 		{name: "unmatched target returns false", errCode: "5", targetErr: satim.ErrMissingRequiredData, want: false},
 	}

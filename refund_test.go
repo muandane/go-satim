@@ -79,4 +79,23 @@ func TestClient_Refund(t *testing.T) {
 			t.Errorf("expected errorCode 0, got %s", resp.ErrorCode)
 		}
 	})
+
+	t.Run("API error code 5 from gateway", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errorCode":"5","errorMessage":"Access denied"}`))
+		})
+
+		_, err := client.Refund(t.Context(), satim.RefundRequest{
+			OrderID:     "ord-123",
+			AmountMinor: 50000,
+		})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, satim.ErrInvalidCredentials) {
+			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		}
+	})
 }
