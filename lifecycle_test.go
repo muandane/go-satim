@@ -32,7 +32,7 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				http.Error(w, `{"errorCode":"1","errorMessage":"Order mismatch"}`, http.StatusBadRequest)
 				return
 			}
-			fmt.Fprintf(w, `{
+			_, _ = fmt.Fprintf(w, `{
 				"orderId": %q,
 				"formUrl": "https://test.satim.dz/payment/merch/%s",
 				"errorCode": "0"
@@ -43,7 +43,7 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				http.Error(w, `{"errorCode":"6","errorMessage":"Unknown order"}`, http.StatusNotFound)
 				return
 			}
-			fmt.Fprintf(w, `{
+			_, _ = fmt.Fprintf(w, `{
 				"orderId": %q,
 				"OrderNumber": %d,
 				"OrderStatus": "2",
@@ -63,7 +63,7 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				http.Error(w, `{"errorCode":"6","errorMessage":"Unknown order"}`, http.StatusNotFound)
 				return
 			}
-			fmt.Fprintf(w, `{
+			_, _ = fmt.Fprintf(w, `{
 				"orderId": %q,
 				"OrderNumber": %d,
 				"OrderStatus": "2",
