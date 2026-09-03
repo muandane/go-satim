@@ -5,6 +5,16 @@ All notable changes to `go-satim` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.1 - 2026-09-03
+
+### What's Changed
+
+* test: enhance client tests and add error handling scenarios by @muandane in https://github.com/muandane/go-satim/pull/3
+* test: add fuzz tests for order request validation and JSON unmarshalling by @muandane in https://github.com/muandane/go-satim/pull/4
+* feat: Go 1.27 modernization, fix OrderNumber loss, and improve error ergonomics by @muandane in https://github.com/muandane/go-satim/pull/6
+
+**Full Changelog**: https://github.com/muandane/go-satim/compare/v0.1.0...v0.1.1
+
 ## [Unreleased]
 
 ### Added
