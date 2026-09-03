@@ -32,18 +32,18 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				http.Error(w, `{"errorCode":"1","errorMessage":"Order mismatch"}`, http.StatusBadRequest)
 				return
 			}
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			fmt.Fprintf(w, `{
 				"orderId": %q,
 				"formUrl": "https://test.satim.dz/payment/merch/%s",
 				"errorCode": "0"
-			}`, mockOrderID, mockOrderID)))
+			}`, mockOrderID, mockOrderID)
 
 		case "/confirmOrder.do":
 			if r.FormValue("orderId") != mockOrderID {
 				http.Error(w, `{"errorCode":"6","errorMessage":"Unknown order"}`, http.StatusNotFound)
 				return
 			}
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			fmt.Fprintf(w, `{
 				"orderId": %q,
 				"OrderNumber": %d,
 				"OrderStatus": "2",
@@ -56,14 +56,14 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				"cardholderName": "ALICE CITIZEN",
 				"approvalCode": "APP123",
 				"params": {"respCode_desc": "Approved by Issuer"}
-			}`, mockOrderID, mockOrderNumber, mockAmount)))
+			}`, mockOrderID, mockOrderNumber, mockAmount)
 
 		case "/getOrderStatus.do":
 			if r.FormValue("orderId") != mockOrderID {
 				http.Error(w, `{"errorCode":"6","errorMessage":"Unknown order"}`, http.StatusNotFound)
 				return
 			}
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			fmt.Fprintf(w, `{
 				"orderId": %q,
 				"OrderNumber": %d,
 				"OrderStatus": "2",
@@ -71,7 +71,7 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 				"actionCode": "0",
 				"amount": "%d",
 				"currency": "012"
-			}`, mockOrderID, mockOrderNumber, mockAmount)))
+			}`, mockOrderID, mockOrderNumber, mockAmount)
 
 		case "/refund.do":
 			if r.FormValue("orderId") != mockOrderID {
@@ -113,8 +113,8 @@ func TestClient_PaymentLifecycle(t *testing.T) {
 	if !confirmResp.IsSuccessful() {
 		t.Errorf("expected order to be successful")
 	}
-	if err := confirmResp.Err(); err != nil {
-		t.Errorf("expected nil error from Err(), got: %v", err)
+	if statusErr := confirmResp.Err(); statusErr != nil {
+		t.Errorf("expected nil error from Err(), got: %v", statusErr)
 	}
 	if confirmResp.OrderNumber != mockOrderNumber {
 		t.Errorf("expected OrderNumber %d, got %d", mockOrderNumber, confirmResp.OrderNumber)
