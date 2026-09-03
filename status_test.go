@@ -1,6 +1,7 @@
 package satim_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -370,6 +371,298 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 				if got := tc.resp.ErrorMessage(); got != tc.wantErrorM {
 					t.Errorf("ErrorMessage() = %q, want %q", got, tc.wantErrorM)
 				}
+			}
+		})
+	}
+}
+
+func TestConfirmRequest_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		req      satim.ConfirmRequest
+		wantErr  error
+		wantLang satim.Language
+	}{
+		{
+			name:    "empty order ID",
+			req:     satim.ConfirmRequest{OrderID: ""},
+			wantErr: satim.ErrMissingRequiredData,
+		},
+		{
+			name:    "invalid language",
+			req:     satim.ConfirmRequest{OrderID: "ord-1", Language: "INVALID"},
+			wantErr: satim.ErrInvalidLanguage,
+		},
+		{
+			name:     "valid with default language FR",
+			req:      satim.ConfirmRequest{OrderID: "ord-1"},
+			wantErr:  nil,
+			wantLang: satim.LanguageFR,
+		},
+		{
+			name:     "valid with explicit language AR",
+			req:      satim.ConfirmRequest{OrderID: "ord-1", Language: satim.LanguageAR},
+			wantErr:  nil,
+			wantLang: satim.LanguageAR,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := tc.req
+			err := req.Validate()
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if req.Language != tc.wantLang {
+					t.Errorf("expected language %s, got %s", tc.wantLang, req.Language)
+				}
+			}
+		})
+	}
+}
+
+func TestGetStatusRequest_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		req      satim.GetStatusRequest
+		wantErr  error
+		wantLang satim.Language
+	}{
+		{
+			name:    "empty order ID",
+			req:     satim.GetStatusRequest{OrderID: ""},
+			wantErr: satim.ErrMissingRequiredData,
+		},
+		{
+			name:    "invalid language",
+			req:     satim.GetStatusRequest{OrderID: "ord-1", Language: "INVALID"},
+			wantErr: satim.ErrInvalidLanguage,
+		},
+		{
+			name:     "valid with default language FR",
+			req:      satim.GetStatusRequest{OrderID: "ord-1"},
+			wantErr:  nil,
+			wantLang: satim.LanguageFR,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := tc.req
+			err := req.Validate()
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if req.Language != tc.wantLang {
+					t.Errorf("expected language %s, got %s", tc.wantLang, req.Language)
+				}
+			}
+		})
+	}
+}
+
+func TestOrderStatusResponse_Err(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		resp    satim.OrderStatusResponse
+		wantErr error
+	}{
+		{
+			name: "approved order returns nil",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusApproved,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "pending registered order returns nil",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusRegistered,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "cancelled order returns ErrPaymentCancelled",
+			resp: satim.OrderStatusResponse{
+				ActionCode: string(satim.ActionCodeCancelled),
+			},
+			wantErr: satim.ErrPaymentCancelled,
+		},
+		{
+			name: "expired session returns ErrSessionExpired",
+			resp: satim.OrderStatusResponse{
+				ActionCode: string(satim.ActionCodeSessionExpired),
+			},
+			wantErr: satim.ErrSessionExpired,
+		},
+		{
+			name: "declined order returns ErrPaymentDeclined",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusDeclined,
+			},
+			wantErr: satim.ErrPaymentDeclined,
+		},
+		{
+			name: "action code 2003 returns ErrPaymentDeclined",
+			resp: satim.OrderStatusResponse{
+				ActionCode: string(satim.ActionCodeDeclined),
+			},
+			wantErr: satim.ErrPaymentDeclined,
+		},
+		{
+			name: "generic failed order with error message text",
+			resp: satim.OrderStatusResponse{
+				ErrorMessageText: "Custom failure reason",
+			},
+			wantErr: errors.New("Custom failure reason"),
+		},
+		{
+			name:    "generic failed order with default message",
+			resp:    satim.OrderStatusResponse{},
+			wantErr: errors.New("satim: payment not completed"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.resp.Err()
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("expected nil error, got: %v", err)
+				}
+			} else {
+				if !errors.Is(err, tc.wantErr) && err.Error() != tc.wantErr.Error() {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestClient_Confirm_Errors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("API error from gateway", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errorCode":"5","errorMessage":"Access denied"}`))
+		})
+
+		_, err := client.Confirm(t.Context(), satim.ConfirmRequest{OrderID: "ord-fail"})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, satim.ErrInvalidCredentials) {
+			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		}
+	})
+
+	t.Run("default language applied during Confirm", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			if r.FormValue("language") != "FR" {
+				t.Errorf("expected language FR, got %s", r.FormValue("language"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orderId":"ord-1","OrderStatus":"2","ErrorCode":"0"}`))
+		})
+
+		resp, err := client.Confirm(t.Context(), satim.ConfirmRequest{OrderID: "ord-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.OrderID != "ord-1" {
+			t.Errorf("expected ord-1, got %s", resp.OrderID)
+		}
+	})
+}
+
+func TestClient_GetStatus_OrderNumber(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"orderId": "ord-status-num",
+			"OrderNumber": 1234567890,
+			"OrderStatus": "2",
+			"ErrorCode": "0",
+			"amount": 100000
+		}`))
+	})
+
+	resp, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-status-num"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.OrderNumber != 1234567890 {
+		t.Errorf("expected OrderNumber 1234567890, got %d", resp.OrderNumber)
+	}
+}
+
+func TestOrderStatusResponse_UnmarshalJSON_NumericVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		data        string
+		wantOrderNo int64
+		wantAmount  int64
+	}{
+		{
+			name:        "string order number and float amount",
+			data:        `{"orderNumber":"9876543210","amount":250000.0}`,
+			wantOrderNo: 9876543210,
+			wantAmount:  250000,
+		},
+		{
+			name:        "int order number and string float amount",
+			data:        `{"OrderNumber":9876543210,"amount":"250000.5"}`,
+			wantOrderNo: 9876543210,
+			wantAmount:  250000,
+		},
+		{
+			name:        "string order number with spaces and int amount",
+			data:        `{"orderNumber":" 9876543210 ","amount":250000}`,
+			wantOrderNo: 9876543210,
+			wantAmount:  250000,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var resp satim.OrderStatusResponse
+			if err := json.Unmarshal([]byte(tc.data), &resp); err != nil {
+				t.Fatalf("unexpected unmarshal error: %v", err)
+			}
+			if resp.OrderNumber != tc.wantOrderNo {
+				t.Errorf("expected OrderNumber %d, got %d", tc.wantOrderNo, resp.OrderNumber)
+			}
+			if resp.AmountMinor != tc.wantAmount {
+				t.Errorf("expected AmountMinor %d, got %d", tc.wantAmount, resp.AmountMinor)
 			}
 		})
 	}

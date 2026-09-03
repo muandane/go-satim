@@ -5,6 +5,9 @@ import (
 	"log/slog"
 )
 
+// CurrencyDZD is the ISO 4217 numeric currency code for Algerian Dinars.
+const CurrencyDZD = "012"
+
 // Language represents the supported payment page localization on SATIM.
 type Language string
 

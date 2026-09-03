@@ -118,14 +118,22 @@ if err != nil {
 	log.Fatalf("payment confirmation failed: %v", err)
 }
 
-if statusResp.IsSuccessful() {
-	log.Printf("Payment confirmed! Cardholder: %s, Masked PAN: %s, Approval Code: %s",
-		statusResp.CardholderName, statusResp.MaskedPAN(), statusResp.ApprovalCode)
-} else if statusResp.IsRejected() {
-	log.Printf("Payment rejected: %s", statusResp.ErrorMessage())
-} else if statusResp.IsCancelled() {
-	log.Println("Payment cancelled by cardholder.")
+if err := statusResp.Err(); err != nil {
+	switch {
+	case errors.Is(err, satim.ErrPaymentCancelled):
+		log.Println("Payment cancelled by cardholder.")
+	case errors.Is(err, satim.ErrSessionExpired):
+		log.Println("Payment session expired.")
+	case errors.Is(err, satim.ErrPaymentDeclined):
+		log.Printf("Payment declined: %s", statusResp.ErrorMessage())
+	default:
+		log.Printf("Payment not completed: %v", err)
+	}
+	return
 }
+
+log.Printf("Payment confirmed! Cardholder: %s, Masked PAN: %s, Approval Code: %s",
+	statusResp.CardholderName, statusResp.MaskedPAN(), statusResp.ApprovalCode)
 ```
 
 ---

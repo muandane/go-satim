@@ -1,8 +1,8 @@
 package satim
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -32,6 +32,10 @@ type RefundResponse struct {
 	Raw map[string]any `json:"-"`
 }
 
+func (r *RefundResponse) setRaw(raw map[string]any) {
+	r.Raw = raw
+}
+
 // Validate verifies refund request parameters.
 func (r *RefundRequest) Validate() error {
 	if r.OrderID == "" {
@@ -40,9 +44,8 @@ func (r *RefundRequest) Validate() error {
 	if r.AmountMinor <= 0 {
 		return ErrInvalidAmount
 	}
-	if r.Language == "" {
-		r.Language = LanguageFR
-	} else if !r.Language.IsValid() {
+	r.Language = cmp.Or(r.Language, LanguageFR)
+	if !r.Language.IsValid() {
 		return ErrInvalidLanguage
 	}
 	return nil
@@ -64,17 +67,5 @@ func (c *Client) Refund(ctx context.Context, req RefundRequest) (*RefundResponse
 	form.Set("amount", strconv.FormatInt(req.AmountMinor, 10))
 	form.Set("language", string(req.Language))
 
-	body, err := c.doRequest(ctx, "/refund.do", form, false)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp RefundResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("satim: parse refund response: %w", err)
-	}
-
-	_ = json.Unmarshal(body, &resp.Raw)
-
-	return &resp, nil
+	return c.execute[RefundResponse](ctx, "/refund.do", form, false)
 }

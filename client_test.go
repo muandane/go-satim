@@ -2,13 +2,16 @@ package satim_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/muandane/go-satim"
 )
@@ -295,4 +298,72 @@ func TestClient_RetryPolicy(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestClient_Do_GenericMethod(t *testing.T) {
+	t.Parallel()
+
+	type CustomResponse struct {
+		CustomID string `json:"customId"`
+		Status   string `json:"status"`
+	}
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/customEndpoint.do" {
+			t.Errorf("expected /customEndpoint.do, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"customId":"cust-99","status":"ok","errorCode":"0"}`))
+	})
+
+	form := make(url.Values)
+	form.Set("param1", "val1")
+
+	resp, err := client.Do[CustomResponse](t.Context(), "/customEndpoint.do", form)
+	if err != nil {
+		t.Fatalf("Do[CustomResponse] failed: %v", err)
+	}
+	if resp.CustomID != "cust-99" || resp.Status != "ok" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestClient_RetryPolicy_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `500 error`, http.StatusInternalServerError)
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := client.GetStatus(ctx, satim.GetStatusRequest{OrderID: "ord-cancel"})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+}
+
+func TestClient_TransportError_NoRetry(t *testing.T) {
+	t.Parallel()
+
+	// Client pointed at dead port to induce connection refused
+	client, err := satim.NewClient(
+		defaultTestCreds,
+		satim.WithBaseURL("http://127.0.0.1:1"),
+	)
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+		AmountMinor: 100000,
+		ReturnURL:   "https://shop.dz/return",
+	})
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+	if !strings.Contains(err.Error(), "satim: transport error:") {
+		t.Errorf("expected 'satim: transport error:' in error message, got: %v", err)
+	}
 }
