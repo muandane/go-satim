@@ -133,6 +133,27 @@ func TestClient_Options(t *testing.T) {
 			t.Errorf("expected trimmed custom URL, got %s", c.BaseURL())
 		}
 	})
+
+	t.Run("later option wins when WithBaseURL and WithTestMode combined", func(t *testing.T) {
+		t.Parallel()
+		custom := "https://custom.gateway.dz/rest"
+
+		c1, err := satim.NewClient(creds, satim.WithBaseURL(custom), satim.WithTestMode(true))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c1.BaseURL() != "https://test.satim.dz/payment/rest" {
+			t.Errorf("expected test URL when WithTestMode is last, got %s", c1.BaseURL())
+		}
+
+		c2, err := satim.NewClient(creds, satim.WithTestMode(true), satim.WithBaseURL(custom))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c2.BaseURL() != custom {
+			t.Errorf("expected custom URL when WithBaseURL is last, got %s", c2.BaseURL())
+		}
+	})
 }
 
 func TestCredentials_Redaction(t *testing.T) {
@@ -365,5 +386,260 @@ func TestClient_TransportError_NoRetry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "satim: transport error:") {
 		t.Errorf("expected 'satim: transport error:' in error message, got: %v", err)
+	}
+}
+
+func TestClient_HTTPStatusError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-JSON 502 returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`<html><body>Bad Gateway</body></html>`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusBadGateway {
+			t.Errorf("StatusCode = %d, want 502", httpErr.StatusCode)
+		}
+		if !strings.Contains(string(httpErr.Body), "Bad Gateway") {
+			t.Errorf("Body = %q, want snippet containing Bad Gateway", httpErr.Body)
+		}
+	})
+
+	t.Run("non-JSON 200 returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not json at all`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusOK {
+			t.Errorf("StatusCode = %d, want 200", httpErr.StatusCode)
+		}
+	})
+
+	t.Run("JSON error body still returns APIError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"errorCode":"5","errorMessage":"Access denied"}`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if !errors.Is(err, satim.ErrInvalidCredentials) {
+			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		}
+	})
+
+	t.Run("503 schema-less JSON returns HTTPStatusError not success", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"down"}`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("StatusCode = %d, want 503", httpErr.StatusCode)
+		}
+	})
+
+	t.Run("400 with SATIM errorCode still returns APIError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errorCode":"5","errorMessage":"Access denied"}`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if !errors.Is(err, satim.ErrInvalidCredentials) {
+			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		}
+		if _, ok := errors.AsType[*satim.HTTPStatusError](err); ok {
+			t.Fatal("must not downgrade APIError to HTTPStatusError")
+		}
+	})
+
+	t.Run("400 SATIM error with wrong Content-Type still APIError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errorCode":"6","errorMessage":"Unknown order"}`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if !errors.Is(err, satim.ErrOrderNotFound) {
+			t.Fatalf("Content-Type must not override valid SATIM body, got %v", err)
+		}
+	})
+
+	t.Run("200 with SATIM success body still succeeds", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"orderId":"o1","formUrl":"https://test.satim.dz/p","errorCode":"0"}`))
+		})
+
+		resp, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.OrderID != "o1" {
+			t.Errorf("OrderID = %q, want o1", resp.OrderID)
+		}
+	})
+
+	t.Run("200 schema-less JSON still succeeds", func(t *testing.T) {
+		// Choice: keep prior 2xx behavior — schema-less JSON on 200 is treated as success.
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok","note":"no errorCode field"}`))
+		})
+
+		resp, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if err != nil {
+			t.Fatalf("200 schema-less must remain success (unchanged 2xx behavior), got %v", err)
+		}
+		if resp == nil {
+			t.Fatal("expected non-nil response")
+		}
+	})
+
+	t.Run("200 with JSON array body returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`["not","an","object"]`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError for non-object JSON, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusOK {
+			t.Errorf("StatusCode = %d, want 200", httpErr.StatusCode)
+		}
+	})
+
+	t.Run("502 with JSON string body returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`"gateway timeout"`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusBadGateway {
+			t.Errorf("StatusCode = %d, want 502", httpErr.StatusCode)
+		}
+	})
+}
+
+func TestClient_UserAgentHeader(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if !strings.Contains(ua, "go-satim/") {
+			t.Errorf("User-Agent = %q, want substring go-satim/", ua)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"orderId":"o1","formUrl":"https://test.satim.dz/p","errorCode":"0"}`))
+	})
+
+	_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+		AmountMinor: 100000,
+		ReturnURL:   "https://shop.dz/return",
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+}
+
+func TestClient_RetryAfterHeader(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		att := attempts.Add(1)
+		if att == 1 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, `server error`, http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ErrorCode":"0","OrderStatus":"2","orderId":"ord-retry"}`))
+	})
+
+	resp, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-retry"})
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+	if !resp.IsSuccessful() {
+		t.Errorf("expected successful status")
+	}
+	if attempts.Load() < 2 {
+		t.Errorf("expected retry, got %d attempts", attempts.Load())
 	}
 }

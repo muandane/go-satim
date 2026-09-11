@@ -28,6 +28,9 @@ var (
 	// ErrSessionExpired indicates the payment page session timed out (actionCode -2007).
 	ErrSessionExpired = errors.New("satim: payment session expired (actionCode -2007)")
 
+	// ErrPaymentFailed indicates the payment did not complete successfully for a non-specific reason.
+	ErrPaymentFailed = errors.New("satim: payment not completed")
+
 	// ErrSystemError indicates a system failure on SATIM's end (BPC error code 7).
 	ErrSystemError = errors.New("satim: gateway system error (BPC error 7)")
 
@@ -48,9 +51,6 @@ var (
 
 	// ErrDescriptionTooLong indicates the order description exceeds 598 characters.
 	ErrDescriptionTooLong = errors.New("satim: description exceeds maximum length of 598 characters")
-
-	// ErrInvalidUUID indicates an order ID is not a valid UUID format.
-	ErrInvalidUUID = errors.New("satim: invalid UUID format")
 )
 
 // APIError represents an error response returned by the SATIM/BPC REST gateway.
@@ -88,4 +88,30 @@ func (e *APIError) Is(target error) bool {
 	default:
 		return false
 	}
+}
+
+// HTTPStatusError is returned when the gateway responds with a non-JSON body
+// (or a body that cannot be decoded as JSON), typically for proxy/HTML error pages.
+type HTTPStatusError struct {
+	StatusCode int
+	Body       []byte // first 512 bytes of the response body
+}
+
+func (e *HTTPStatusError) Error() string {
+	snippet := string(e.Body)
+	if len(snippet) > 128 {
+		snippet = snippet[:128] + "..."
+	}
+	return fmt.Sprintf("satim: unexpected HTTP %d response: %q", e.StatusCode, snippet)
+}
+
+func truncateBody(body []byte, n int) []byte {
+	if len(body) <= n {
+		out := make([]byte, len(body))
+		copy(out, body)
+		return out
+	}
+	out := make([]byte, n)
+	copy(out, body[:n])
+	return out
 }

@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // RegisterOrderRequest contains all parameters required to register a payment order on SATIM.
@@ -67,7 +68,8 @@ func (r *RegisterOrderResponse) setRaw(raw map[string]any) {
 	r.Raw = raw
 }
 
-// Validate checks request validity and sets required defaults.
+// Validate checks request validity without mutating the receiver.
+// Empty FailURL, Language, and OrderNumber (0) are accepted; defaults are applied by Register.
 func (r *RegisterOrderRequest) Validate() error {
 	if r.AmountMinor <= 0 {
 		return ErrInvalidAmount
@@ -81,25 +83,19 @@ func (r *RegisterOrderRequest) Validate() error {
 		return fmt.Errorf("%w: ReturnURL: %w", ErrInvalidURL, err)
 	}
 
-	r.FailURL = cmp.Or(r.FailURL, r.ReturnURL)
-	if _, err := url.ParseRequestURI(r.FailURL); err != nil {
-		return fmt.Errorf("%w: FailURL: %w", ErrInvalidURL, err)
+	if r.FailURL != "" {
+		if _, err := url.ParseRequestURI(r.FailURL); err != nil {
+			return fmt.Errorf("%w: FailURL: %w", ErrInvalidURL, err)
+		}
 	}
 
 	if r.OrderNumber != 0 {
 		if r.OrderNumber < 1000000000 || r.OrderNumber > 9999999999 {
 			return ErrInvalidOrderNumber
 		}
-	} else {
-		generated, err := GenerateOrderNumber()
-		if err != nil {
-			return fmt.Errorf("satim: generate order number: %w", err)
-		}
-		r.OrderNumber = generated
 	}
 
-	r.Language = cmp.Or(r.Language, LanguageFR)
-	if !r.Language.IsValid() {
+	if r.Language != "" && !r.Language.IsValid() {
 		return ErrInvalidLanguage
 	}
 
@@ -116,6 +112,28 @@ func (r *RegisterOrderRequest) Validate() error {
 	return nil
 }
 
+// prepareRegisterRequest validates req and returns a copy with defaults applied
+// (FailURL, Language, and a generated OrderNumber when unset).
+func prepareRegisterRequest(req RegisterOrderRequest) (RegisterOrderRequest, error) {
+	if err := req.Validate(); err != nil {
+		return req, err
+	}
+
+	out := req
+	out.FailURL = cmp.Or(out.FailURL, out.ReturnURL)
+	out.Language = effectiveLanguage(out.Language)
+
+	if out.OrderNumber == 0 {
+		generated, err := GenerateOrderNumber()
+		if err != nil {
+			return req, fmt.Errorf("satim: generate order number: %w", err)
+		}
+		out.OrderNumber = generated
+	}
+
+	return out, nil
+}
+
 // GenerateOrderNumber produces a cryptographically secure random 10-digit number.
 func GenerateOrderNumber() (int64, error) {
 	// Range: 1000000000 to 9999999999 (width: 9000000000)
@@ -125,6 +143,27 @@ func GenerateOrderNumber() (int64, error) {
 		return 0, err
 	}
 	return n.Int64() + 1000000000, nil
+}
+
+// validateCallbackURL ensures ReturnURL/FailURL use an allowed scheme.
+// https is always allowed; http is allowed only when allowHTTP is true (test mode).
+func validateCallbackURL(raw string, allowHTTP bool) error {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidURL, err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "https":
+		return nil
+	case "http":
+		if allowHTTP {
+			return nil
+		}
+		return fmt.Errorf("%w: http URLs are only allowed in test mode", ErrInvalidURL)
+	default:
+		return fmt.Errorf("%w: unsupported URL scheme %q (https required)", ErrInvalidURL, scheme)
+	}
 }
 
 // Register registers a new payment order with the SATIM gateway and returns the payment URL.
@@ -139,14 +178,23 @@ func GenerateOrderNumber() (int64, error) {
 // Register with a new order number. Use GetStatus to verify if the order was created, or check
 // your system's reconciliation queue.
 func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*RegisterOrderResponse, error) {
-	if err := req.Validate(); err != nil {
+	prepared, err := prepareRegisterRequest(req)
+	if err != nil {
 		return nil, err
 	}
 
-	additionalData := make(map[string]string)
-	additionalData["force_terminal_id"] = c.creds.TerminalID
+	allowHTTP := c.baseURL == testBaseURL
+	if err = validateCallbackURL(prepared.ReturnURL, allowHTTP); err != nil {
+		return nil, fmt.Errorf("%w: ReturnURL", err)
+	}
+	if err = validateCallbackURL(prepared.FailURL, allowHTTP); err != nil {
+		return nil, fmt.Errorf("%w: FailURL", err)
+	}
 
-	maps.Copy(additionalData, req.UserDefinedFields)
+	additionalData := make(map[string]string)
+	maps.Copy(additionalData, prepared.UserDefinedFields)
+	// Always set after copy so UserDefinedFields cannot override the merchant terminal.
+	additionalData["force_terminal_id"] = c.creds.TerminalID
 
 	jsonParamsBytes, err := json.Marshal(additionalData)
 	if err != nil {
@@ -154,20 +202,20 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 	}
 
 	form := make(url.Values)
-	form.Set("orderNumber", strconv.FormatInt(req.OrderNumber, 10))
-	form.Set("amount", strconv.FormatInt(req.AmountMinor, 10))
+	form.Set("orderNumber", strconv.FormatInt(prepared.OrderNumber, 10))
+	form.Set("amount", strconv.FormatInt(prepared.AmountMinor, 10))
 	form.Set("currency", CurrencyDZD) // SATIM is strictly DZD
-	form.Set("returnUrl", req.ReturnURL)
-	form.Set("failUrl", req.FailURL)
-	form.Set("language", string(req.Language))
+	form.Set("returnUrl", prepared.ReturnURL)
+	form.Set("failUrl", prepared.FailURL)
+	form.Set("language", string(prepared.Language))
 	form.Set("jsonParams", string(jsonParamsBytes))
 
-	if req.Description != "" {
-		form.Set("description", req.Description)
+	if prepared.Description != "" {
+		form.Set("description", prepared.Description)
 	}
 
-	if req.SessionTimeoutSecs > 0 {
-		form.Set("sessionTimeoutSecs", strconv.Itoa(req.SessionTimeoutSecs))
+	if prepared.SessionTimeoutSecs > 0 {
+		form.Set("sessionTimeoutSecs", strconv.Itoa(prepared.SessionTimeoutSecs))
 	}
 
 	resp, err := c.execute[RegisterOrderResponse](ctx, "/register.do", form, false)
@@ -175,6 +223,6 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 		return nil, err
 	}
 
-	resp.OrderNumber = req.OrderNumber
+	resp.OrderNumber = prepared.OrderNumber
 	return resp, nil
 }

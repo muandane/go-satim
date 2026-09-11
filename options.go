@@ -19,6 +19,7 @@ func WithHTTPClient(httpClient *http.Client) ClientOption {
 }
 
 // WithBaseURL overrides the API base URL. This is primarily intended for tests against a mock server.
+// WithBaseURL and WithTestMode both set baseURL; when both are passed to NewClient, the later option wins.
 func WithBaseURL(baseURL string) ClientOption {
 	return func(c *Client) {
 		c.baseURL = strings.TrimRight(baseURL, "/")
@@ -26,6 +27,7 @@ func WithBaseURL(baseURL string) ClientOption {
 }
 
 // WithTestMode switches between the production endpoint (cib.satim.dz) and the test sandbox (test.satim.dz).
+// WithBaseURL and WithTestMode both set baseURL; when both are passed to NewClient, the later option wins.
 func WithTestMode(enabled bool) ClientOption {
 	return func(c *Client) {
 		if enabled {
