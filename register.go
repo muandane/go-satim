@@ -184,10 +184,10 @@ func (c *Client) Register(ctx context.Context, req RegisterOrderRequest) (*Regis
 	}
 
 	allowHTTP := c.baseURL == testBaseURL
-	if err := validateCallbackURL(prepared.ReturnURL, allowHTTP); err != nil {
+	if err = validateCallbackURL(prepared.ReturnURL, allowHTTP); err != nil {
 		return nil, fmt.Errorf("%w: ReturnURL", err)
 	}
-	if err := validateCallbackURL(prepared.FailURL, allowHTTP); err != nil {
+	if err = validateCallbackURL(prepared.FailURL, allowHTTP); err != nil {
 		return nil, fmt.Errorf("%w: FailURL", err)
 	}
 
