@@ -1,9 +1,7 @@
 package satim
 
 import (
-	"cmp"
 	"context"
-	"fmt"
 	"net/url"
 	"strconv"
 )
@@ -36,17 +34,13 @@ func (r *RefundResponse) setRaw(raw map[string]any) {
 	r.Raw = raw
 }
 
-// Validate verifies refund request parameters.
+// Validate verifies refund request parameters without mutating the receiver.
 func (r *RefundRequest) Validate() error {
-	if r.OrderID == "" {
-		return fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
+	if err := validateOrderIDAndLanguage(r.OrderID, &r.Language); err != nil {
+		return err
 	}
 	if r.AmountMinor <= 0 {
 		return ErrInvalidAmount
-	}
-	r.Language = cmp.Or(r.Language, LanguageFR)
-	if !r.Language.IsValid() {
-		return ErrInvalidLanguage
 	}
 	return nil
 }
@@ -65,7 +59,7 @@ func (c *Client) Refund(ctx context.Context, req RefundRequest) (*RefundResponse
 	form := make(url.Values)
 	form.Set("orderId", req.OrderID)
 	form.Set("amount", strconv.FormatInt(req.AmountMinor, 10))
-	form.Set("language", string(req.Language))
+	form.Set("language", string(effectiveLanguage(req.Language)))
 
 	return c.execute[RefundResponse](ctx, "/refund.do", form, false)
 }

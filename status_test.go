@@ -154,6 +154,7 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 		resp         satim.OrderStatusResponse
 		isSuccess    bool
 		isPending    bool
+		isHeld       bool
 		isRejected   bool
 		isRefunded   bool
 		isCancelled  bool
@@ -225,8 +226,8 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 			isCancelled:  false,
 			isExpired:    false,
 			isFailed:     true,
-			wantSuccessM: "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
-			wantErrorM:   "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+			wantSuccessM: "Payment is declined",
+			wantErrorM:   "Payment is declined",
 		},
 		{
 			name: "auth failed order status 6",
@@ -241,8 +242,22 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 			isCancelled:  false,
 			isExpired:    false,
 			isFailed:     true,
-			wantSuccessM: "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
-			wantErrorM:   "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »",
+			wantSuccessM: "Payment failed",
+			wantErrorM:   "Payment failed",
+		},
+		{
+			name: "held order status 1 (two-phase pre-auth)",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusHeld,
+				ErrorCode:   "0",
+			},
+			isSuccess:  false,
+			isPending:  false,
+			isHeld:     true,
+			isRejected: false,
+			isRefunded: false,
+			isFailed:   false,
+			wantErrorM: "Payment failed",
 		},
 		{
 			name: "refunded order status 4",
@@ -347,6 +362,9 @@ func TestOrderStatusResponse_Predicates(t *testing.T) {
 			if got := tc.resp.IsPending(); got != tc.isPending {
 				t.Errorf("IsPending() = %v, want %v", got, tc.isPending)
 			}
+			if got := tc.resp.IsHeld(); got != tc.isHeld {
+				t.Errorf("IsHeld() = %v, want %v", got, tc.isHeld)
+			}
 			if got := tc.resp.IsRejected(); got != tc.isRejected {
 				t.Errorf("IsRejected() = %v, want %v", got, tc.isRejected)
 			}
@@ -399,7 +417,7 @@ func TestConfirmRequest_Validate(t *testing.T) {
 			name:     "valid with default language FR",
 			req:      satim.ConfirmRequest{OrderID: "ord-1"},
 			wantErr:  nil,
-			wantLang: satim.LanguageFR,
+			wantLang: "", // Validate does not default Language
 		},
 		{
 			name:     "valid with explicit language AR",
@@ -423,7 +441,7 @@ func TestConfirmRequest_Validate(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				if req.Language != tc.wantLang {
-					t.Errorf("expected language %s, got %s", tc.wantLang, req.Language)
+					t.Errorf("expected language %q, got %q", tc.wantLang, req.Language)
 				}
 			}
 		})
@@ -453,7 +471,7 @@ func TestGetStatusRequest_Validate(t *testing.T) {
 			name:     "valid with default language FR",
 			req:      satim.GetStatusRequest{OrderID: "ord-1"},
 			wantErr:  nil,
-			wantLang: satim.LanguageFR,
+			wantLang: "", // Validate does not default Language
 		},
 	}
 
@@ -471,7 +489,7 @@ func TestGetStatusRequest_Validate(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				if req.Language != tc.wantLang {
-					t.Errorf("expected language %s, got %s", tc.wantLang, req.Language)
+					t.Errorf("expected language %q, got %q", tc.wantLang, req.Language)
 				}
 			}
 		})
@@ -497,6 +515,13 @@ func TestOrderStatusResponse_Err(t *testing.T) {
 			name: "pending registered order returns nil",
 			resp: satim.OrderStatusResponse{
 				OrderStatus: satim.OrderStatusRegistered,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "held order returns nil",
+			resp: satim.OrderStatusResponse{
+				OrderStatus: satim.OrderStatusHeld,
 			},
 			wantErr: nil,
 		},
@@ -533,12 +558,12 @@ func TestOrderStatusResponse_Err(t *testing.T) {
 			resp: satim.OrderStatusResponse{
 				ErrorMessageText: "Custom failure reason",
 			},
-			wantErr: errors.New("Custom failure reason"),
+			wantErr: satim.ErrPaymentFailed,
 		},
 		{
 			name:    "generic failed order with default message",
 			resp:    satim.OrderStatusResponse{},
-			wantErr: errors.New("satim: payment not completed"),
+			wantErr: satim.ErrPaymentFailed,
 		},
 	}
 
@@ -551,8 +576,8 @@ func TestOrderStatusResponse_Err(t *testing.T) {
 					t.Fatalf("expected nil error, got: %v", err)
 				}
 			} else {
-				if !errors.Is(err, tc.wantErr) && err.Error() != tc.wantErr.Error() {
-					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected errors.Is(..., %v), got %v", tc.wantErr, err)
 				}
 			}
 		})

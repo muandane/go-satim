@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muandane/go-satim"
 )
@@ -134,20 +135,145 @@ func TestRegister_Validation(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected validation error: %v", err)
 				}
-				if req.OrderNumber < 1000000000 || req.OrderNumber > 9999999999 {
-					t.Errorf("expected 10-digit order number, got %d", req.OrderNumber)
-				}
+				// Pure Validate must not mutate defaults.
 				if tc.name == "valid default request" {
-					if req.FailURL != req.ReturnURL {
-						t.Errorf("expected FailURL to default to ReturnURL (%q), got %q", req.ReturnURL, req.FailURL)
+					if req.OrderNumber != 0 {
+						t.Errorf("Validate must not generate OrderNumber, got %d", req.OrderNumber)
 					}
-					if req.Language != satim.LanguageFR {
-						t.Errorf("expected default LanguageFR, got %q", req.Language)
+					if req.FailURL != "" {
+						t.Errorf("Validate must not default FailURL, got %q", req.FailURL)
 					}
+					if req.Language != "" {
+						t.Errorf("Validate must not default Language, got %q", req.Language)
+					}
+				}
+				if req.OrderNumber != 0 && (req.OrderNumber < 1000000000 || req.OrderNumber > 9999999999) {
+					t.Errorf("expected 10-digit order number when set, got %d", req.OrderNumber)
 				}
 			}
 		})
 	}
+}
+
+func TestRegisterOrderRequest_ValidateDoesNotMutateOrderNumber(t *testing.T) {
+	t.Parallel()
+
+	req := satim.RegisterOrderRequest{
+		AmountMinor: 100000,
+		ReturnURL:   "https://example.com/return",
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("first Validate: %v", err)
+	}
+	if req.OrderNumber != 0 {
+		t.Fatalf("OrderNumber mutated to %d after first Validate", req.OrderNumber)
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("second Validate: %v", err)
+	}
+	if req.OrderNumber != 0 {
+		t.Fatalf("OrderNumber mutated to %d after second Validate", req.OrderNumber)
+	}
+}
+
+func TestClient_Register_CallbackURLSchemes(t *testing.T) {
+	t.Parallel()
+
+	creds := satim.Credentials{Username: "u", Password: "p", TerminalID: "t"}
+
+	t.Run("javascript scheme rejected", func(t *testing.T) {
+		t.Parallel()
+		client, err := satim.NewClient(creds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "javascript:alert(1)",
+		})
+		if !errors.Is(err, satim.ErrInvalidURL) {
+			t.Fatalf("expected ErrInvalidURL, got %v", err)
+		}
+	})
+
+	t.Run("ftp scheme rejected", func(t *testing.T) {
+		t.Parallel()
+		client, err := satim.NewClient(creds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "ftp://files.example.com/cb",
+		})
+		if !errors.Is(err, satim.ErrInvalidURL) {
+			t.Fatalf("expected ErrInvalidURL, got %v", err)
+		}
+	})
+
+	t.Run("scheme-less rejected", func(t *testing.T) {
+		t.Parallel()
+		client, err := satim.NewClient(creds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "example.com/callback",
+		})
+		if err == nil {
+			t.Fatal("expected error for scheme-less URL")
+		}
+	})
+
+	t.Run("http rejected on production client", func(t *testing.T) {
+		t.Parallel()
+		client, err := satim.NewClient(creds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "http://shop.dz/return",
+		})
+		if !errors.Is(err, satim.ErrInvalidURL) {
+			t.Fatalf("expected ErrInvalidURL, got %v", err)
+		}
+	})
+
+	t.Run("http allowed in test mode", func(t *testing.T) {
+		t.Parallel()
+		// WithTestMode sets baseURL to test.satim.dz (allows http callbacks).
+		// Scheme check runs before the HTTP call; we only assert ErrInvalidURL is not returned.
+		client, err := satim.NewClient(creds, satim.WithTestMode(true), satim.WithHTTPClient(&http.Client{
+			Timeout: 50 * time.Millisecond,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "http://shop.dz/return",
+		})
+		if errors.Is(err, satim.ErrInvalidURL) {
+			t.Fatalf("http should be allowed in test mode, got %v", err)
+		}
+	})
+
+	t.Run("https accepted on production client via mock", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orderId":"o1","formUrl":"https://test.satim.dz/p","errorCode":"0"}`))
+		})
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestGenerateOrderNumber(t *testing.T) {
@@ -161,6 +287,36 @@ func TestGenerateOrderNumber(t *testing.T) {
 		if n < 1000000000 || n > 9999999999 {
 			t.Fatalf("generated number %d out of 10-digit range [1000000000, 9999999999]", n)
 		}
+	}
+}
+
+func TestClient_Register_UserDefinedFieldsCannotOverrideTerminalID(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("failed to parse form: %v", err)
+		}
+		var jsonParams map[string]string
+		if err := json.Unmarshal([]byte(r.FormValue("jsonParams")), &jsonParams); err != nil {
+			t.Fatalf("failed to unmarshal jsonParams: %v", err)
+		}
+		if got := jsonParams["force_terminal_id"]; got != "TERM01" {
+			t.Errorf("force_terminal_id = %q, want TERM01 (credentials terminal); attacker value must not win", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"orderId":"ord-1","formUrl":"https://test.satim.dz/pay","errorCode":"0"}`))
+	})
+
+	_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+		AmountMinor: 100000,
+		ReturnURL:   "https://shop.dz/return",
+		UserDefinedFields: map[string]string{
+			"force_terminal_id": "attacker-terminal",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
 	}
 }
 

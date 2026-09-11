@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
+	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,7 +23,19 @@ const (
 	defaultHTTPTimeout = 15 * time.Second
 	maxResponseBody    = 1 << 20 // 1 MB response limit to prevent memory exhaustion
 	readOnlyMaxRetries = 2
+	maxRetryAfter      = 5 * time.Second
+	httpStatusBodyCap  = 512
 )
+
+// Version is the SDK version embedded in the User-Agent header.
+// Override at link time, for example:
+//
+//	go build -ldflags "-X github.com/muandane/go-satim.Version=v1.2.3"
+var Version = "dev"
+
+func userAgent() string {
+	return "go-satim/" + Version + " (+https://github.com/muandane/go-satim)"
+}
 
 // Client interacts with the SATIM / BPC REST payment gateway.
 type Client struct {
@@ -73,6 +88,10 @@ type rawSettable interface {
 }
 
 // Do performs an HTTP POST request to a SATIM endpoint and decodes the JSON response into T.
+//
+// Do is an authenticated low-level escape hatch: it performs no automatic retries.
+// Prefer the typed package methods (Register, Confirm, GetStatus, Refund) unless you need
+// a custom SATIM/BPC endpoint that this SDK does not expose.
 func (c *Client) Do[T any](ctx context.Context, endpoint string, form url.Values) (*T, error) {
 	return c.execute[T](ctx, endpoint, form, false)
 }
@@ -114,15 +133,18 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 	}
 
 	var lastErr error
+	var retryAfterHeader string
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
+			delay := backoffDelay(attempt, retryAfterHeader)
 			select {
 			case <-ctx.Done():
 				return nil, nil, ctx.Err()
-			case <-time.After(time.Duration(attempt*100) * time.Millisecond):
+			case <-time.After(delay):
 			}
 		}
+		retryAfterHeader = ""
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, strings.NewReader(encodedBody))
 		if err != nil {
@@ -131,6 +153,7 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 
 		httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		httpReq.Header.Set("Accept", "application/json")
+		httpReq.Header.Set("User-Agent", userAgent())
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -158,13 +181,17 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 		}
 
 		if resp.StatusCode >= http.StatusInternalServerError && isReadOnly && attempt < maxAttempts-1 {
+			retryAfterHeader = resp.Header.Get("Retry-After")
 			lastErr = fmt.Errorf("satim: server error HTTP %d", resp.StatusCode)
 			continue
 		}
 
 		var raw map[string]any
 		if err := json.Unmarshal(body, &raw); err != nil {
-			return nil, nil, fmt.Errorf("satim: decode json response: %w", err)
+			return nil, nil, &HTTPStatusError{
+				StatusCode: resp.StatusCode,
+				Body:       truncateBody(body, httpStatusBodyCap),
+			}
 		}
 
 		// Check for error codes in response
@@ -187,6 +214,51 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 	}
 
 	return nil, nil, errors.New("satim: request failed with unknown error")
+}
+
+func isJSONContentType(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return strings.Contains(strings.ToLower(contentType), "application/json")
+	}
+	return mediaType == "application/json"
+}
+
+// backoffDelay returns the wait before a retry attempt.
+// Full jitter over [0, attempt*100ms], overridden by Retry-After when present (capped at 5s).
+func backoffDelay(attempt int, retryAfter string) time.Duration {
+	if d, ok := parseRetryAfter(retryAfter); ok {
+		if d > maxRetryAfter {
+			return maxRetryAfter
+		}
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	base := time.Duration(attempt*100) * time.Millisecond
+	if base <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(base) + 1))
+}
+
+func parseRetryAfter(v string) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		d := time.Until(t)
+		return d, true
+	}
+	return 0, false
 }
 
 func extractString(m map[string]any, keys ...string) (string, bool) {

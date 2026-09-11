@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -36,14 +35,7 @@ type ConfirmRequest struct {
 
 // Validate checks whether the confirmation parameters are valid.
 func (r *ConfirmRequest) Validate() error {
-	if r.OrderID == "" {
-		return fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
-	}
-	r.Language = cmp.Or(r.Language, LanguageFR)
-	if !r.Language.IsValid() {
-		return ErrInvalidLanguage
-	}
-	return nil
+	return validateOrderIDAndLanguage(r.OrderID, &r.Language)
 }
 
 // GetStatusRequest specifies the order whose status to query.
@@ -57,14 +49,24 @@ type GetStatusRequest struct {
 
 // Validate checks whether the status query parameters are valid.
 func (r *GetStatusRequest) Validate() error {
-	if r.OrderID == "" {
+	return validateOrderIDAndLanguage(r.OrderID, &r.Language)
+}
+
+// validateOrderIDAndLanguage checks OrderID is non-empty and Language is empty or supported.
+// It does not mutate lang.
+func validateOrderIDAndLanguage(orderID string, lang *Language) error {
+	if orderID == "" {
 		return fmt.Errorf("%w: OrderID is required", ErrMissingRequiredData)
 	}
-	r.Language = cmp.Or(r.Language, LanguageFR)
-	if !r.Language.IsValid() {
+	if lang != nil && *lang != "" && !lang.IsValid() {
 		return ErrInvalidLanguage
 	}
 	return nil
+}
+
+// effectiveLanguage returns lang or LanguageFR when lang is empty.
+func effectiveLanguage(lang Language) Language {
+	return cmp.Or(lang, LanguageFR)
 }
 
 // OrderStatusResponse contains the detailed transaction state returned by Confirm or GetStatus.
@@ -198,6 +200,11 @@ func (r *OrderStatusResponse) IsPending() bool {
 	return r.OrderStatus == OrderStatusRegistered || r.OrderStatus == OrderStatusACSAuth
 }
 
+// IsHeld reports whether funds were held for a two-phase (pre-authorization) transaction.
+func (r *OrderStatusResponse) IsHeld() bool {
+	return r.OrderStatus == OrderStatusHeld
+}
+
 // IsRejected reports whether the transaction was declined or rejected.
 func (r *OrderStatusResponse) IsRejected() bool {
 	if r.OrderStatus == OrderStatusApproved || r.OrderStatus == OrderStatusRefunded || r.OrderStatus == OrderStatusRegistered {
@@ -227,15 +234,16 @@ func (r *OrderStatusResponse) IsExpired() bool {
 	return r.ActionCode == string(ActionCodeSessionExpired)
 }
 
-// IsFailed reports whether the transaction failed and was not refunded or pending.
+// IsFailed reports whether the transaction failed and was not refunded, pending, or held.
 func (r *OrderStatusResponse) IsFailed() bool {
-	return !r.IsSuccessful() && !r.IsRefunded() && !r.IsPending()
+	return !r.IsSuccessful() && !r.IsRefunded() && !r.IsPending() && !r.IsHeld()
 }
 
-// Err returns a sentinel error corresponding to the transaction outcome, or nil if the payment was successful or pending.
+// Err returns a sentinel error corresponding to the transaction outcome, or nil if the payment
+// was successful, pending, or held (non-terminal states).
 func (r *OrderStatusResponse) Err() error {
 	switch {
-	case r.IsSuccessful(), r.IsPending():
+	case r.IsSuccessful(), r.IsPending(), r.IsHeld():
 		return nil
 	case r.IsCancelled():
 		return ErrPaymentCancelled
@@ -245,9 +253,9 @@ func (r *OrderStatusResponse) Err() error {
 		return ErrPaymentDeclined
 	default:
 		if r.ErrorMessageText != "" {
-			return errors.New(r.ErrorMessageText)
+			return fmt.Errorf("%w: %s", ErrPaymentFailed, r.ErrorMessageText)
 		}
-		return errors.New("satim: payment not completed")
+		return ErrPaymentFailed
 	}
 }
 
@@ -265,11 +273,8 @@ func (r *OrderStatusResponse) SuccessMessage() string {
 	return "Payment was successful"
 }
 
-// ErrorMessage returns the error description or a localized default.
+// ErrorMessage returns the error description from gateway fields, or a generic default.
 func (r *OrderStatusResponse) ErrorMessage() string {
-	if r.IsRejected() {
-		return "« Votre transaction a été rejetée/ Your transaction was rejected/ تم رفض معاملتك »"
-	}
 	if r.IsRefunded() {
 		return "Payment was refunded"
 	}
@@ -294,7 +299,7 @@ func (r *OrderStatusResponse) MaskedPAN() string {
 //
 // BPC SEMANTICS:
 // In the BPC SmartVista platform, /confirmOrder.do performs order completion after the cardholder
-// returns from the gateway. It transition the transaction to the confirmed state.
+// returns from the gateway. It transitions the transaction to the confirmed state.
 func (c *Client) Confirm(ctx context.Context, req ConfirmRequest) (*OrderStatusResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -302,7 +307,7 @@ func (c *Client) Confirm(ctx context.Context, req ConfirmRequest) (*OrderStatusR
 
 	form := make(url.Values)
 	form.Set("orderId", req.OrderID)
-	form.Set("language", string(req.Language))
+	form.Set("language", string(effectiveLanguage(req.Language)))
 
 	return c.execute[OrderStatusResponse](ctx, "/confirmOrder.do", form, false)
 }
@@ -319,7 +324,7 @@ func (c *Client) GetStatus(ctx context.Context, req GetStatusRequest) (*OrderSta
 
 	form := make(url.Values)
 	form.Set("orderId", req.OrderID)
-	form.Set("language", string(req.Language))
+	form.Set("language", string(effectiveLanguage(req.Language)))
 
 	return c.execute[OrderStatusResponse](ctx, "/getOrderStatus.do", form, true)
 }
