@@ -692,3 +692,41 @@ func TestOrderStatusResponse_UnmarshalJSON_NumericVariants(t *testing.T) {
 		})
 	}
 }
+
+// Proves OrderStatusResponse.UnmarshalJSON still runs on the execute/json/v2 path
+// (not only encoding/json.Unmarshal in isolation).
+func TestClient_GetStatus_CustomUnmarshalJSONViaExecute(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"orderId": "ord-v2",
+			"OrderNumber": "9876543210",
+			"OrderStatus": 2,
+			"ErrorCode": 0,
+			"actionCode": "0",
+			"amount": "150000.5"
+		}`))
+	})
+
+	resp, err := client.GetStatus(t.Context(), satim.GetStatusRequest{OrderID: "ord-v2"})
+	if err != nil {
+		t.Fatalf("GetStatus via execute/jsonv2 failed: %v", err)
+	}
+	if resp.OrderNumber != 9876543210 {
+		t.Errorf("OrderNumber = %d, want 9876543210 (custom UnmarshalJSON)", resp.OrderNumber)
+	}
+	if resp.AmountMinor != 150000 {
+		t.Errorf("AmountMinor = %d, want 150000 (custom UnmarshalJSON)", resp.AmountMinor)
+	}
+	if resp.OrderStatus != satim.OrderStatusApproved {
+		t.Errorf("OrderStatus = %q, want %q", resp.OrderStatus, satim.OrderStatusApproved)
+	}
+	if !resp.IsSuccessful() {
+		t.Error("expected IsSuccessful after numeric-variant decode")
+	}
+	if resp.Raw == nil {
+		t.Error("expected Raw map populated via rawSettable")
+	}
+}

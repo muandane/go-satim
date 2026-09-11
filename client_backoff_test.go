@@ -252,12 +252,12 @@ func TestDoRequest_NilFormAndTypedDecodeMismatch(t *testing.T) {
 	}
 
 	// nil form path in doRequest
-	body, raw, err := c.doRequest(context.Background(), "/x.do", nil, false)
+	val, raw, err := c.doRequest(context.Background(), "/x.do", nil, false)
 	if err != nil {
 		t.Fatalf("doRequest nil form: %v", err)
 	}
-	if len(body) == 0 || raw == nil {
-		t.Fatal("expected body and raw")
+	if len(val) == 0 || raw == nil {
+		t.Fatal("expected value and raw")
 	}
 
 	// execute typed decode failure (map ok, T not)

@@ -2,7 +2,6 @@ package satim
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 )
 
 const (
@@ -96,19 +98,28 @@ func (c *Client) Do[T any](ctx context.Context, endpoint string, form url.Values
 	return c.execute[T](ctx, endpoint, form, false)
 }
 
-// execute executes an HTTP request, decodes the response into T, and assigns raw map data if supported.
+// execute decodes a gateway response into T from a single jsontext.Value parse.
+// Custom UnmarshalJSON methods (e.g. OrderStatusResponse) are invoked by encoding/json/v2.
 func (c *Client) execute[T any](ctx context.Context, endpoint string, form url.Values, isReadOnly bool) (*T, error) {
-	body, raw, err := c.doRequest(ctx, endpoint, form, isReadOnly)
+	val, raw, err := c.doRequest(ctx, endpoint, form, isReadOnly)
 	if err != nil {
 		return nil, err
 	}
 
 	var resp T
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := jsonv2.Unmarshal(val, &resp); err != nil {
 		return nil, fmt.Errorf("satim: decode json response: %w", err)
 	}
 
 	if s, ok := any(&resp).(rawSettable); ok {
+		// Prefer the map already decoded for errorCode inspection; fall back to a
+		// second semantic unmarshal from the same jsontext.Value if needed.
+		if raw == nil {
+			raw = make(map[string]any)
+			if err := jsonv2.Unmarshal(val, &raw); err != nil {
+				return nil, fmt.Errorf("satim: decode raw response: %w", err)
+			}
+		}
 		s.setRaw(raw)
 	}
 
@@ -117,7 +128,11 @@ func (c *Client) execute[T any](ctx context.Context, endpoint string, form url.V
 
 // doRequest performs an HTTP POST request to the SATIM REST gateway.
 // When isReadOnly is true (e.g. for GetStatus), safe retries are applied on transient network errors.
-func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values, isReadOnly bool) ([]byte, map[string]any, error) {
+//
+// The response body is captured once as a jsontext.Value. Semantic unmarshaling into a map
+// (for errorCode) and later into T (in execute) both reuse that value — no second byte scan
+// for JSON syntax validation beyond Value.IsValid.
+func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values, isReadOnly bool) (jsontext.Value, map[string]any, error) {
 	if form == nil {
 		form = make(url.Values)
 	}
@@ -186,27 +201,66 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, form url.Values
 			continue
 		}
 
-		var raw map[string]any
-		if err := json.Unmarshal(body, &raw); err != nil {
+		statusOK := resp.StatusCode >= 200 && resp.StatusCode < 300
+		contentType := resp.Header.Get("Content-Type")
+		// First-pass signal only — never gates success/error alone (parse + SATIM shape win).
+		ctJSON := isJSONContentType(contentType)
+
+		val := jsontext.Value(body)
+		if !val.IsValid() {
+			c.logger.DebugContext(ctx, "satim response is not valid JSON",
+				slog.String("endpoint", endpoint),
+				slog.Int("status", resp.StatusCode),
+				slog.Bool("content_type_json", ctJSON),
+			)
 			return nil, nil, &HTTPStatusError{
 				StatusCode: resp.StatusCode,
 				Body:       truncateBody(body, httpStatusBodyCap),
 			}
 		}
 
-		// Check for error codes in response
-		if errorCode, ok := extractString(raw, "errorCode", "ErrorCode"); ok && errorCode != "0" && errorCode != "" {
+		var raw map[string]any
+		if err := jsonv2.Unmarshal(val, &raw); err != nil {
+			c.logger.DebugContext(ctx, "satim response JSON is not an object map",
+				slog.String("endpoint", endpoint),
+				slog.Int("status", resp.StatusCode),
+				slog.Bool("content_type_json", ctJSON),
+				slog.String("error", err.Error()),
+			)
+			return nil, nil, &HTTPStatusError{
+				StatusCode: resp.StatusCode,
+				Body:       truncateBody(body, httpStatusBodyCap),
+			}
+		}
+
+		errorCode, hasErrorCode := extractString(raw, "errorCode", "ErrorCode")
+		if hasErrorCode && errorCode != "0" && errorCode != "" {
 			errorMsg, _ := extractString(raw, "errorMessage", "ErrorMessage")
-			apiErr := &APIError{
+			return nil, nil, &APIError{
 				ErrorCode:    errorCode,
 				ErrorMessage: errorMsg,
 				HTTPStatus:   resp.StatusCode,
 				Raw:          raw,
 			}
-			return nil, nil, apiErr
 		}
 
-		return body, raw, nil
+		// Non-2xx without a SATIM errorCode must not be treated as success
+		// (e.g. proxy `{"status":"maintenance"}` on 502/503).
+		if !statusOK {
+			c.logger.DebugContext(ctx, "satim non-2xx without gateway errorCode",
+				slog.String("endpoint", endpoint),
+				slog.Int("status", resp.StatusCode),
+				slog.Bool("content_type_json", ctJSON),
+				slog.Bool("has_error_code", hasErrorCode),
+			)
+			return nil, nil, &HTTPStatusError{
+				StatusCode: resp.StatusCode,
+				Body:       truncateBody(body, httpStatusBodyCap),
+			}
+		}
+
+		// 2xx: schema-less JSON (no errorCode) remains success — same as prior behavior.
+		return val, raw, nil
 	}
 
 	if lastErr != nil {
