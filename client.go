@@ -112,14 +112,6 @@ func (c *Client) execute[T any](ctx context.Context, endpoint string, form url.V
 	}
 
 	if s, ok := any(&resp).(rawSettable); ok {
-		// Prefer the map already decoded for errorCode inspection; fall back to a
-		// second semantic unmarshal from the same jsontext.Value if needed.
-		if raw == nil {
-			raw = make(map[string]any)
-			if err := jsonv2.Unmarshal(val, &raw); err != nil {
-				return nil, fmt.Errorf("satim: decode raw response: %w", err)
-			}
-		}
 		s.setRaw(raw)
 	}
 

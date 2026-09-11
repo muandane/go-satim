@@ -534,7 +534,6 @@ func TestClient_HTTPStatusError(t *testing.T) {
 
 	t.Run("200 schema-less JSON still succeeds", func(t *testing.T) {
 		// Choice: keep prior 2xx behavior — schema-less JSON on 200 is treated as success.
-		// Callers receive a typed zero/partial value rather than HTTPStatusError.
 		t.Parallel()
 		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -551,6 +550,48 @@ func TestClient_HTTPStatusError(t *testing.T) {
 		}
 		if resp == nil {
 			t.Fatal("expected non-nil response")
+		}
+	})
+
+	t.Run("200 with JSON array body returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`["not","an","object"]`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError for non-object JSON, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusOK {
+			t.Errorf("StatusCode = %d, want 200", httpErr.StatusCode)
+		}
+	})
+
+	t.Run("502 with JSON string body returns HTTPStatusError", func(t *testing.T) {
+		t.Parallel()
+		client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`"gateway timeout"`))
+		})
+
+		_, err := client.Register(t.Context(), satim.RegisterOrderRequest{
+			AmountMinor: 100000,
+			ReturnURL:   "https://shop.dz/return",
+		})
+		var httpErr *satim.HTTPStatusError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("expected *HTTPStatusError, got %v", err)
+		}
+		if httpErr.StatusCode != http.StatusBadGateway {
+			t.Errorf("StatusCode = %d, want 502", httpErr.StatusCode)
 		}
 	})
 }
